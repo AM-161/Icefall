@@ -544,7 +544,8 @@ m <- leaflet() |>
     pal       = pal_h,
     values    = c(0, max_h),
     title     = sprintf(
-      "Eisdicke (m)\nmit Exposition & Sonne (%s)",
+      "Eisdicke (m)
+mit Exposition & Sonne (%s)",
       format(d_today, "%Y-%m-%d")
     ),
     labFormat = labelFormat(digits = 2),
@@ -564,12 +565,29 @@ m <- leaflet() |>
   ) |>
   addControl(
     html = htmltools::HTML(
-      "<div style='font-size: 10px; background: rgba(255,255,255,0.9); padding: 4px 6px; border-radius: 4px; max-width: 260px; line-height: 1.3;'><strong>Quellen:</strong> INCA (GeoSphere Austria, <a href='https://doi.org/10.60669/6akt-5p05' target='_blank'>doi:10.60669/6akt-5p05</a>); DEM Tirol (<a href='https://www.data.gv.at/katalog/datasets/0454f5f3-1d8c-464e-847d-541901eb021a' target='_blank'>data.gv.at</a>)<br/><strong>Autor:</strong> <a href='https://www.instagram.com/antifascist_mountaineer/' target='_blank'>@antifascist_mountaineer</a></div>"
+      "<div style='font-size: 10px; background: rgba(255,255,255,0.9); padding: 4px 6px; border-radius: 4px; max-width: 260px; line-height: 1.3; text-align: center; position: relative; left: 50%; transform: translateX(-50%);'><strong>Quellen:</strong> INCA (GeoSphere Austria, <a href='https://doi.org/10.60669/6akt-5p05' target='_blank'>doi:10.60669/6akt-5p05</a>); DEM Tirol (<a href='https://www.data.gv.at/katalog/datasets/0454f5f3-1d8c-464e-847d-541901eb021a' target='_blank'>data.gv.at</a>)<br/><strong>Autor:</strong> <a href='https://www.instagram.com/antifascist_mountaineer/' target='_blank'>@antifascist_mountaineer</a></div>"
     ),
-    position = "topleft"
+    position = "bottomleft"
   )
+
+# Popup beim Laden: kurze Erklärung zu Karte, Eisdicke & Climbability
+m <- onRender(
+  m,
+  "
+  function(el, x) {
+    var map = this;
+    var content =
+      '<b>Eisfall-Karte – Prototyp</b><br/>' +
+      '<b>Eisdicke (m):</b> aus Freezing Degree Hours (INCA T2M), Exposition und Winter-Sonnenhöhe. Rasterauflösung ca. 1 km.<br/>' +
+      '<b>Climbability (0–1):</b> heuristischer Index aus Eisdicke und Strahlungs-/Temperaturbedingungen – 1 ≈ eher günstige, 0 ≈ eher schlechte Bedingungen.<br/>' +
+      '<b>Wichtiger Hinweis:</b> Kein Lawinen- oder Eisgutachten, nur grobe Orientierung. Lokale Verhältnisse, Lawinenlagebericht und eigene Erfahrung sind entscheidend.';
+    L.popup({maxWidth: 320})
+      .setLatLng(map.getCenter())
+      .setContent(content)
+      .openOn(map);
+  }
+  "
+)
 
 # für GitHub Pages / Web speichern
 saveWidget(m, "eisdicke_nordtirol.html", selfcontained = TRUE)
-
-m
