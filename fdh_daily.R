@@ -504,6 +504,8 @@ climb_disp <- disaggregate(
 
 # Climbability = 0 unsichtbar machen, damit die Basiskarte gut sichtbar bleibt
 climb_disp_masked <- climb_disp
+climb_disp_masked[climb_disp_masked < 0] <- 0
+climb_disp_masked[climb_disp_masked > 1] <- 1
 climb_disp_masked[climb_disp_masked <= 0] <- NA
 
 max_h   <- cellStats(ice_thick_expo, max, na.rm = TRUE)
@@ -636,12 +638,12 @@ m <- htmlwidgets::onRender(
   function(el, x) {
     var map = this;
     var content =
-      "<div style='font-size:18px; line-height:1.5;'>" +
+      '<div style=\"font-size:18px; line-height:1.5;\">' +
       '<b>Eisfall-Karte Nordtirol – experimentelles Modell</b><br/>' +
       '<b>Eisdicke (m):</b> Abschätzung aus Freezing Degree Hours (Summe der Stunden mit Lufttemperatur unter 0&nbsp;°C), ' +
       'skaliert über einen einfachen Energiebilanz-Ansatz (konvektiver Wärmetransport) und korrigiert mit Hangexposition, Hangneigung ' +
       'und jahreszeitlicher Sonnenhöhe. Auflösung ~1&nbsp;km – beschreibt eher Gitterzellen/Regionen als konkrete einzelne Eislinien.<br/>' +
-      '<b>Climbability (0–1):</b> heuristischer Index, der Eisdicke mit aktuellen Schmelzstunden (Temperaturen über 0&nbsp;°C), ' +
+      '<b>Climbability (0–1):</b> heuristischer Index, der Eisdicke mit aktuellen Schmelzstunden (Temperaturen über 0&nbsp;C), ' +
       'Strahlungsbelastung (Südexposition, flache Wintersonne) und groben Wind-/Feuchtebedingungen kombiniert. Werte nahe 1 = eher kalte, ' +
       'potenziell günstigere Phasen; nahe 0 = eher ungünstige, schmelzdominierte Phasen.<br/>' +
       '<b>Wichtiger Hinweis:</b> Kein Lawinen- oder Eisgutachten, nur grobe regionale Orientierung. Lokale Verhältnisse (Wasserführung, ' +
@@ -656,4 +658,4 @@ m <- htmlwidgets::onRender(
 )
 
 # für GitHub Pages / Web speichern
-saveWidget(m, "eisdicke_nordtirol.html", selfcontained = TRUE)
+saveWidget(m, "eisdicke_nordtirol.html", selfcontained = TRUE)(m, "eisdicke_nordtirol.html", selfcontained = TRUE)
