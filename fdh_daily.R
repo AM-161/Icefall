@@ -342,30 +342,6 @@ ice_thick_pot[r_FDH < FDH_crit] <- NA
 
 ## 5) Plot mit gewünschter Farbskala ------------------
 
-# --- Farbverlauf + Legende mit 2 Nachkommastellen 
-
-# obere Grenze robust bestimmen
-max_h <- cellStats(ice_thick_pot, max, na.rm = TRUE)
-
-# Farbverlauf
-col_fun <- colorRampPalette(c("white", "orange", "green", "darkgreen"))
-
-# Ticks für die Legende
-leg_at  <- pretty(c(0, max_h), n = 5)
-leg_lab <- format(leg_at, digits = 2, nsmall = 2)
-
-plot(ice_thick_pot,
-     col       = col_fun(100),
-     zlim      = c(0, max_h),
-     main      = sprintf("Potentielle Eisdicke (α = %.5f m / (°C·h))", alpha),
-     axes      = TRUE,
-     xlab      = "Längengrad",
-     ylab      = "Breitengrad",
-     asp       = 1,
-     axis.args = list(at = leg_at, labels = leg_lab))   # Legende: 2 Nachkommastellen
-
-## Interaktive Karte ------
-# 1) Farbskala wie im Plot
 max_h   <- cellStats(ice_thick_pot, max, na.rm = TRUE)
 col_fun <- colorRampPalette(c("white", "orange", "green", "darkgreen"))
 
@@ -375,14 +351,14 @@ pal <- colorNumeric(
   na.color = "transparent"
 )
 
-# 2) Leaflet-Map bauen
+# --- Leaflet-Karte bauen -------------------------
 m <- leaflet() |>
   addTiles(group = "OSM") |>
   addRasterImage(
     ice_thick_pot,
     colors  = pal,
     opacity = 0.8,
-    project = TRUE   # reproject nach Web-Mercator für Leaflet
+    project = TRUE
   ) |>
   addLegend(
     pal    = pal,
@@ -391,8 +367,7 @@ m <- leaflet() |>
     labFormat = labelFormat(digits = 2)
   )
 
-# 3) Im Viewer anschauen
-m
-
-saveWidget(m, "eisdicke_nordtirol.html", selfcontained = TRUE)
+# --- HTML speichern ------------------------------
+out_file <- "eisdicke_nordtirol.html"
+saveWidget(m, out_file, selfcontained = TRUE)
 
