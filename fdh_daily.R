@@ -567,7 +567,7 @@ mit Exposition & Sonne (%s)",
   addControl(
     html = htmltools::HTML(
       paste0(
-        "<div style='font-size: 12px; background: rgba(255,255,255,0.9); padding: 4px 6px; border-radius: 4px; max-width: 280px; line-height: 1.4; margin-top: 4px;'>",
+        "<div style='font-size: 16px; background: rgba(255,255,255,0.9); padding: 4px 6px; border-radius: 4px; max-width: 280px; line-height: 1.4; margin-top: 4px;'>",
         "<strong>Quellen:</strong> INCA (GeoSphere Austria, ",
         "<a href='https://doi.org/10.60669/6akt-5p05' target='_blank'>doi:10.60669/6akt-5p05</a>); ",
         "DEM Tirol (<a href='https://www.data.gv.at/katalog/datasets/0454f5f3-1d8c-464e-847d-541901eb021a' target='_blank'>data.gv.at</a>)<br/>",
@@ -636,6 +636,7 @@ m <- htmlwidgets::onRender(
   function(el, x) {
     var map = this;
     var content =
+      "<div style='font-size:18px; line-height:1.5;'>" +
       '<b>Eisfall-Karte Nordtirol – experimentelles Modell</b><br/>' +
       '<b>Eisdicke (m):</b> Abschätzung aus Freezing Degree Hours (Summe der Stunden mit Lufttemperatur unter 0&nbsp;°C), ' +
       'skaliert über einen einfachen Energiebilanz-Ansatz (konvektiver Wärmetransport) und korrigiert mit Hangexposition, Hangneigung ' +
@@ -644,7 +645,8 @@ m <- htmlwidgets::onRender(
       'Strahlungsbelastung (Südexposition, flache Wintersonne) und groben Wind-/Feuchtebedingungen kombiniert. Werte nahe 1 = eher kalte, ' +
       'potenziell günstigere Phasen; nahe 0 = eher ungünstige, schmelzdominierte Phasen.<br/>' +
       '<b>Wichtiger Hinweis:</b> Kein Lawinen- oder Eisgutachten, nur grobe regionale Orientierung. Lokale Verhältnisse (Wasserführung, ' +
-      'Lawinenkegel, Felsqualität, Eisstruktur etc.) sowie der aktuelle Lawinenlagebericht und deine eigene Erfahrung sind immer entscheidend.';
+      'Lawinenkegel, Felsqualität, Eisstruktur etc.) sowie der aktuelle Lawinenlagebericht und deine eigene Erfahrung sind immer entscheidend.' +
+      '</div>';
     L.popup({maxWidth: 340})
       .setLatLng(map.getCenter())
       .setContent(content)
