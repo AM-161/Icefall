@@ -253,7 +253,7 @@ crs(r_template) <- "EPSG:4326"
 
 # vorverarbeitetes DEM im INCA-Grid (EPSG:4326, ~1 km), vorher lokal aus 10-m-DEM abgeleitet
 # Datei liegt im Repo unter data/DEM_Tirol_INCAgrid_1km_epsg4326.tif
-dem_inca <- raster("data/DEM_Tirol_INCAgrid_1km_epsg4326.tif")
+dem_inca <- raster("DEM_Tirol_INCAgrid_1km_epsg4326.tif")
 crs(dem_inca) <- "EPSG:4326"
 names(dem_inca) <- "elev_m"
 
