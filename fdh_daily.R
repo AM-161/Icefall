@@ -658,4 +658,4 @@ m <- htmlwidgets::onRender(
 )
 
 # für GitHub Pages / Web speichern
-saveWidget(m, "eisdicke_nordtirol.html", selfcontained = TRUE)(m, "eisdicke_nordtirol.html", selfcontained = TRUE)
+saveWidget(m, "eisdicke_nordtirol.html", selfcontained = TRUE)
