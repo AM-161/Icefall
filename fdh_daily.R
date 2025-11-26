@@ -1,8 +1,8 @@
 library(httr)
-library(terra)
 library(raster)
 library(leaflet)
 library(htmlwidgets)
+library(ncdf4)
 
 # Daten Herunterladen ####
 
@@ -84,9 +84,6 @@ for (cs in chunk_starts) {
 
 
 # ---- 4) Alle Chunks einlesen und zusammenfügen ###-
-
-library(ncdf4)
-
 # ###
 # 4) Alle Chunks mit ncdf4 einlesen & zusammenfügen
 #    -> lon/lat + alle Variablen ("T2M", "TD2M", "RH2M", "RR", "GL")
