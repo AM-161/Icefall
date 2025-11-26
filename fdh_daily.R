@@ -257,7 +257,7 @@ crs(r_template) <- "EPSG:4326"
 # 4) DEM auf INCA-Grid + Expositionsindex (solar_index_ij) -----------
 
 # vorverarbeitetes DEM im INCA-Grid (EPSG:4326, ~1 km), vorher lokal aus 10-m-DEM abgeleitet
-# Datei liegt im Repo unter data/DEM_Tirol_INCAgrid_1km_epsg4326.tif
+# Datei liegt im Repo im Hauptverzeichnis unter DEM_Tirol_INCAgrid_1km_epsg4326.tif
 dem_inca <- raster("DEM_Tirol_INCAgrid_1km_epsg4326.tif")
 crs(dem_inca) <- "EPSG:4326"
 names(dem_inca) <- "elev_m"
@@ -574,7 +574,49 @@ mit Exposition & Sonne (%s)",
 m <- htmlwidgets::prependContent(
   m,
   htmltools::tags$style(
-    htmltools::HTML("\n      /* Allgemein größere Controls (Desktop & Mobile) */\n      .leaflet-control {\n        font-size: 18px !important;\n      }\n\n      /* Legende (addLegend) */\n      .info.legend {\n        font-size: 18px !important;\n        padding: 8px 14px !important;\n      }\n\n      /* Layer-Control-Box (Eisdicke / Climbability) */\n      .leaflet-control-layers-expanded {\n        font-size: 18px !important;\n        padding: 8px 12px !important;\n      }\n\n      /* Checkboxen im Layer-Control größer machen */\n      .leaflet-control-layers-overlays input[type='checkbox'] {\n        transform: scale(1.8);\n        margin-right: 6px;\n      }\n\n      /* Auf kleinen Bildschirmen (Handy) noch etwas größer */\n      @media (max-width: 768px) {\n        .leaflet-control {\n          font-size: 20px !important;\n        }\n        .info.legend {\n          font-size: 20px !important;\n        }\n        .leaflet-control-layers-expanded {\n          font-size: 20px !important;\n        }\n        .leaflet-control-layers-overlays input[type='checkbox'] {\n          transform: scale(2.2);\n        }\n      }\n    ")
+    htmltools::HTML("
+      /* Deutlich größere Controls (Desktop & Mobile) */
+      .leaflet-control {
+        font-size: 20px !important;
+      }
+
+      /* Legende (addLegend) – Text + Farbskala */
+      .info.legend {
+        font-size: 20px !important;
+        padding: 10px 18px !important;
+        line-height: 1.4 !important;
+      }
+
+      /* Layer-Control-Box (Eisdicke / Climbability) */
+      .leaflet-control-layers-expanded {
+        font-size: 20px !important;
+        padding: 10px 14px !important;
+      }
+
+      /* Checkboxen im Layer-Control größer machen */
+      .leaflet-control-layers-overlays input[type='checkbox'] {
+        transform: scale(2.0);
+        margin-right: 8px;
+      }
+
+      /* Auf kleinen Bildschirmen (Handy) noch größer */
+      @media (max-width: 768px) {
+        .leaflet-control {
+          font-size: 24px !important;
+        }
+        .info.legend {
+          font-size: 24px !important;
+          padding: 12px 20px !important;
+        }
+        .leaflet-control-layers-expanded {
+          font-size: 24px !important;
+          padding: 12px 18px !important;
+        }
+        .leaflet-control-layers-overlays input[type='checkbox'] {
+          transform: scale(2.5);
+        }
+      }
+    ")
   )
 )
 
