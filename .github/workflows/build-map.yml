@@ -2,7 +2,7 @@ name: Build FDH Ice Map daily
 
 on:
   schedule:
-    # täglich um 04:00 UTC
+    # Täglich um 04:00 UTC
     - cron: '0 4 * * *'
   workflow_dispatch:
 
@@ -43,7 +43,8 @@ jobs:
             any::leaflet
             any::htmlwidgets
             any::ncdf4
-          # hier muss genau dein Script-Name stehen:
+          # hier der Name deines Scripts, damit die Action nach weiteren
+          # Imports im Code scannen kann
           needs: fdh_daily.R
 
       - name: Run FDH daily script
