@@ -251,16 +251,10 @@ crs(r_template) <- "EPSG:4326"
 
 # 4) DEM auf INCA-Grid + Expositionsindex (solar_index_ij) -----------
 
-# DEM in EPSG:31254 einlesen (Pfad ggf. anpassen)
-dem_10 <- raster("DGM_Tirol_10m_epsg31254_2006_2020.tif")
-crs(dem_10) <- "EPSG:31254"
-
-# Auf INCA-Grid reprojizieren (WGS84, ~1 km)
-dem_inca <- projectRaster(
-  dem_10,
-  r_template,
-  method = "bilinear"
-)
+# vorverarbeitetes DEM im INCA-Grid (EPSG:4326, ~1 km), vorher lokal aus 10-m-DEM abgeleitet
+# Datei liegt im Repo unter data/DEM_Tirol_INCAgrid_1km_epsg4326.tif
+dem_inca <- raster("data/DEM_Tirol_INCAgrid_1km_epsg4326.tif")
+crs(dem_inca) <- "EPSG:4326"
 names(dem_inca) <- "elev_m"
 
 # Slope & Aspect im INCA-Grid
@@ -315,7 +309,7 @@ H_t <- (hour - 12) * 15 * pi / 180
 
 # sinus der Sonnenhöhe (rad)
 sin_alpha_t <- sin(lat_center_rad) * sin(delta_t) +
-  cos(lat_center_rad) * cos(delta_t) * cos(H_t)
+               cos(lat_center_rad) * cos(delta_t) * cos(H_t)
 
 # Nacht -> 0
 sin_alpha_t[sin_alpha_t < 0] <- 0
@@ -395,6 +389,7 @@ crs(r_FDH_eff)    <- crs(r_template)
 names(r_FDH_eff)  <- "FDH_eff_C_h"
 
 
+
 # 7) Effektive FDH -> Eisdicke + Climbability-Index ------------------
 
 # Energie -> Eisdicke (einfacher lineare Ansatz)
@@ -408,6 +403,7 @@ alpha <- h_c * 3600 / (rho_i * Lf)   # m / (°C·h)
 ice_thick_expo <- r_FDH_eff * alpha
 ice_thick_expo[r_FDH_eff < FDH_crit] <- NA
 names(ice_thick_expo) <- "h_pot_expo_m"
+
 
 # Matrix der Eisdicke (für Climbability)
 h_mat_ij <- FDH_sum_eff * alpha   # [nx, ny]
@@ -477,12 +473,30 @@ extent(climb_r) <- extent(r_template)
 crs(climb_r)    <- crs(r_template)
 names(climb_r)  <- "Climbability_0_1"
 
+
 # (Optional) als GeoTIFF speichern
 # writeRaster(ice_thick_expo, "Eisdicke_pot_expo_Tirol_1km.tif", format = "GTiff", overwrite = TRUE)
 # writeRaster(climb_r,      "Climbability_Tirol_1km.tif",       format = "GTiff", overwrite = TRUE)
 
 
 # 8) Interaktive Leaflet-Karte (Eisdicke) -----------------------------
+
+# Display-Version der Raster für eine weichere Darstellung (nur fürs Plotten)
+# Original: ~1 km; hier z.B. auf ~250 m verfeinern (Faktor 4)
+fact_disp <- 4
+
+ice_thick_disp <- disaggregate(
+  ice_thick_expo,
+  fact   = fact_disp,
+  method = "bilinear"  # weiche Interpolation nur für die Anzeige
+)
+
+climb_disp <- disaggregate(
+  climb_r,
+  fact   = fact_disp,
+  method = "bilinear"
+)
+
 
 max_h   <- cellStats(ice_thick_expo, max, na.rm = TRUE)
 col_fun <- colorRampPalette(c("white", "orange", "green", "darkgreen"))
@@ -500,19 +514,19 @@ pal_ci <- colorNumeric(
   na.color = "transparent"
 )
 
-d_today <- Sys.Date()
+ d_today <- Sys.Date()
 
 m <- leaflet() |>
   addTiles(group = "OSM") |>
   addRasterImage(
-    ice_thick_expo,
+    ice_thick_disp,
     colors  = pal_h,
     opacity = 0.8,
     project = TRUE,
     group   = "Eisdicke"
   ) |>
   addRasterImage(
-    climb_r,
+    climb_disp,
     colors  = pal_ci,
     opacity = 0.7,
     project = TRUE,
