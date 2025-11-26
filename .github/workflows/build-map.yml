@@ -1,18 +1,18 @@
-name: Build FDH Ice Map daily
+name: Build and deploy FDH Ice Map
 
 on:
   schedule:
-    # Täglich um 04:00 UTC
-    - cron: '0 4 * * *'
+    - cron: '0 4 * * *'   # täglich um 04:00 UTC
   workflow_dispatch:
 
-jobs:
-  build-map:
-    runs-on: ubuntu-latest
+permissions:
+  contents: read
+  pages: write
+  id-token: write
 
-    env:
-      TZ: Europe/Vienna
-      NOT_CRAN: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
@@ -23,7 +23,7 @@ jobs:
         with:
           use-public-rspm: true
 
-      - name: Install system dependencies (for ncdf4, raster, etc.)
+      - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -43,9 +43,24 @@ jobs:
             any::leaflet
             any::htmlwidgets
             any::ncdf4
-          # hier der Name deines Scripts, damit die Action nach weiteren
-          # Imports im Code scannen kann
-          needs: fdh_daily.R
 
-      - name: Run FDH daily script
+      - name: Run FDH script
         run: Rscript fdh_daily.R
+
+      # ALLES, was auf die Website soll (z.B. nur die HTML-Datei oder der ganze Ordner)
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .   # oder z.B. 'public' falls du später einen Unterordner machst
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
