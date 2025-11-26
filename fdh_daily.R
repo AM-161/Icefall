@@ -314,7 +314,7 @@ H_t <- (hour - 12) * 15 * pi / 180
 
 # sinus der Sonnenhöhe (rad)
 sin_alpha_t <- sin(lat_center_rad) * sin(delta_t) +
-  cos(lat_center_rad) * cos(delta_t) * cos(H_t)
+               cos(lat_center_rad) * cos(delta_t) * cos(H_t)
 
 # Nacht -> 0
 sin_alpha_t[sin_alpha_t < 0] <- 0
@@ -571,17 +571,22 @@ mit Exposition & Sonne (%s)",
   )
 
 # Popup beim Laden: kurze Erklärung zu Karte, Eisdicke & Climbability
-m <- onRender(
+m <- htmlwidgets::onRender(
   m,
   "
   function(el, x) {
     var map = this;
     var content =
-      '<b>Eisfall-Karte – Prototyp</b><br/>' +
-      '<b>Eisdicke (m):</b> aus Freezing Degree Hours (INCA T2M), Exposition und Winter-Sonnenhöhe. Rasterauflösung ca. 1 km.<br/>' +
-      '<b>Climbability (0–1):</b> heuristischer Index aus Eisdicke und Strahlungs-/Temperaturbedingungen – 1 ≈ eher günstige, 0 ≈ eher schlechte Bedingungen.<br/>' +
-      '<b>Wichtiger Hinweis:</b> Kein Lawinen- oder Eisgutachten, nur grobe Orientierung. Lokale Verhältnisse, Lawinenlagebericht und eigene Erfahrung sind entscheidend.';
-    L.popup({maxWidth: 320})
+      '<b>Eisfall-Karte Nordtirol – experimentelles Modell</b><br/>' +
+      '<b>Eisdicke (m):</b> Abschätzung aus Freezing Degree Hours (Summe der Stunden mit Lufttemperatur unter 0&nbsp;°C), ' +
+      'skaliert über einen einfachen Energiebilanz-Ansatz (konvektiver Wärmetransport) und korrigiert mit Hangexposition, Hangneigung ' +
+      'und jahreszeitlicher Sonnenhöhe. Auflösung ~1&nbsp;km – beschreibt eher Gitterzellen/Regionen als konkrete einzelne Eislinien.<br/>' +
+      '<b>Climbability (0–1):</b> heuristischer Index, der Eisdicke mit aktuellen Schmelzstunden (Temperaturen über 0&nbsp;°C), ' +
+      'Strahlungsbelastung (Südexposition, flache Wintersonne) und groben Wind-/Feuchtebedingungen kombiniert. Werte nahe 1 = eher kalte, ' +
+      'potenziell günstigere Phasen; nahe 0 = eher ungünstige, schmelzdominierte Phasen.<br/>' +
+      '<b>Wichtiger Hinweis:</b> Kein Lawinen- oder Eisgutachten, nur grobe regionale Orientierung. Lokale Verhältnisse (Wasserführung, ' +
+      'Lawinenkegel, Felsqualität, Eisstruktur etc.) sowie der aktuelle Lawinenlagebericht und deine eigene Erfahrung sind immer entscheidend.';
+    L.popup({maxWidth: 340})({maxWidth: 320})
       .setLatLng(map.getCenter())
       .setContent(content)
       .openOn(map);
