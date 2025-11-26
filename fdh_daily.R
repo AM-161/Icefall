@@ -258,7 +258,7 @@ crs(r_template) <- "EPSG:4326"
 
 # vorverarbeitetes DEM im INCA-Grid (EPSG:4326, ~1 km), vorher lokal aus 10-m-DEM abgeleitet
 # Datei liegt im Repo unter data/DEM_Tirol_INCAgrid_1km_epsg4326.tif
-dem_inca <- raster("data/DEM_Tirol_INCAgrid_1km_epsg4326.tif")
+dem_inca <- raster("DEM_Tirol_INCAgrid_1km_epsg4326.tif")
 crs(dem_inca) <- "EPSG:4326"
 names(dem_inca) <- "elev_m"
 
@@ -565,10 +565,18 @@ mit Exposition & Sonne (%s)",
   ) |>
   addControl(
     html = htmltools::HTML(
-      "<div style='font-size: 10px; background: rgba(255,255,255,0.9); padding: 4px 6px; border-radius: 4px; max-width: 260px; line-height: 1.3; text-align: center; position: relative; left: 50%; transform: translateX(-50%);'><strong>Quellen:</strong> INCA (GeoSphere Austria, <a href='https://doi.org/10.60669/6akt-5p05' target='_blank'>doi:10.60669/6akt-5p05</a>); DEM Tirol (<a href='https://www.data.gv.at/katalog/datasets/0454f5f3-1d8c-464e-847d-541901eb021a' target='_blank'>data.gv.at</a>)<br/><strong>Autor:</strong> <a href='https://www.instagram.com/antifascist_mountaineer/' target='_blank'>@antifascist_mountaineer</a></div>"
+      "<div style='font-size: 9px; background: rgba(255,255,255,0.9); padding: 3px 5px; border-radius: 3px; max-width: 260px; line-height: 1.3; margin-top: 4px;'><strong>Quellen:</strong> INCA (GeoSphere Austria, <a href='https://doi.org/10.60669/6akt-5p05' target='_blank'>doi:10.60669/6akt-5p05</a>); DEM Tirol (<a href='https://www.data.gv.at/katalog/datasets/0454f5f3-1d8c-464e-847d-541901eb021a' target='_blank'>data.gv.at</a>)<br/><strong>Autor:</strong> <a href='https://www.instagram.com/antifascist_mountaineer/' target='_blank'>@antifascist_mountaineer</a></div>"
     ),
     position = "bottomleft"
   )
+
+# Controls (Legenden, Layer-Controls) auf Handy/Desktop größer machen
+m <- htmlwidgets::prependContent(
+  m,
+  htmltools::tags$style(
+    htmltools::HTML("\n      /* Allgemein größere Controls (Desktop & Mobile) */\n      .leaflet-control {\n        font-size: 18px !important;\n      }\n\n      /* Legende (addLegend) */\n      .info.legend {\n        font-size: 18px !important;\n        padding: 8px 14px !important;\n      }\n\n      /* Layer-Control-Box (Eisdicke / Climbability) */\n      .leaflet-control-layers-expanded {\n        font-size: 18px !important;\n        padding: 8px 12px !important;\n      }\n\n      /* Checkboxen im Layer-Control größer machen */\n      .leaflet-control-layers-overlays input[type='checkbox'] {\n        transform: scale(1.8);\n        margin-right: 6px;\n      }\n\n      /* Auf kleinen Bildschirmen (Handy) noch etwas größer */\n      @media (max-width: 768px) {\n        .leaflet-control {\n          font-size: 20px !important;\n        }\n        .info.legend {\n          font-size: 20px !important;\n        }\n        .leaflet-control-layers-expanded {\n          font-size: 20px !important;\n        }\n        .leaflet-control-layers-overlays input[type='checkbox'] {\n          transform: scale(2.2);\n        }\n      }\n    ")
+  )
+)
 
 # Popup beim Laden: kurze Erklärung zu Karte, Eisdicke & Climbability
 m <- htmlwidgets::onRender(
@@ -586,7 +594,7 @@ m <- htmlwidgets::onRender(
       'potenziell günstigere Phasen; nahe 0 = eher ungünstige, schmelzdominierte Phasen.<br/>' +
       '<b>Wichtiger Hinweis:</b> Kein Lawinen- oder Eisgutachten, nur grobe regionale Orientierung. Lokale Verhältnisse (Wasserführung, ' +
       'Lawinenkegel, Felsqualität, Eisstruktur etc.) sowie der aktuelle Lawinenlagebericht und deine eigene Erfahrung sind immer entscheidend.';
-    L.popup({maxWidth: 340})({maxWidth: 320})
+    L.popup({maxWidth: 340})
       .setLatLng(map.getCenter())
       .setContent(content)
       .openOn(map);
