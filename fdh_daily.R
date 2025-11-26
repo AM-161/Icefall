@@ -522,7 +522,8 @@ pal_ci <- colorNumeric(
   na.color = "transparent"
 )
 
-d_today <- Sys.Date()
+d_today    <- Sys.Date()
+last_update <- format(Sys.time(), "%Y-%m-%d %H:%M UTC")
 
 m <- leaflet() |>
   addTiles(group = "OSM") |>
@@ -565,7 +566,15 @@ mit Exposition & Sonne (%s)",
   ) |>
   addControl(
     html = htmltools::HTML(
-      "<div style='font-size: 9px; background: rgba(255,255,255,0.9); padding: 3px 5px; border-radius: 3px; max-width: 260px; line-height: 1.3; margin-top: 4px;'><strong>Quellen:</strong> INCA (GeoSphere Austria, <a href='https://doi.org/10.60669/6akt-5p05' target='_blank'>doi:10.60669/6akt-5p05</a>); DEM Tirol (<a href='https://www.data.gv.at/katalog/datasets/0454f5f3-1d8c-464e-847d-541901eb021a' target='_blank'>data.gv.at</a>)<br/><strong>Autor:</strong> <a href='https://www.instagram.com/antifascist_mountaineer/' target='_blank'>@antifascist_mountaineer</a></div>"
+      paste0(
+        "<div style='font-size: 12px; background: rgba(255,255,255,0.9); padding: 4px 6px; border-radius: 4px; max-width: 280px; line-height: 1.4; margin-top: 4px;'>",
+        "<strong>Quellen:</strong> INCA (GeoSphere Austria, ",
+        "<a href='https://doi.org/10.60669/6akt-5p05' target='_blank'>doi:10.60669/6akt-5p05</a>); ",
+        "DEM Tirol (<a href='https://www.data.gv.at/katalog/datasets/0454f5f3-1d8c-464e-847d-541901eb021a' target='_blank'>data.gv.at</a>)<br/>",
+        "<strong>Autor:</strong> <a href='https://www.instagram.com/antifascist_mountaineer/' target='_blank'>@antifascist_mountaineer</a><br/>",
+        "<em>Letztes Update: ", last_update, "</em>",
+        "</div>"
+      )
     ),
     position = "bottomleft"
   )
