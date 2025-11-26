@@ -9,6 +9,11 @@
 # - interaktive Leaflet-Karte als eisdicke_nordtirol.html speichern
 # =====================================================================
 
+# Datenquellen:
+#   INCA (GeoSphere Austria), DOI: https://doi.org/10.60669/6akt-5p05
+#   DEM Tirol: https://www.data.gv.at/katalog/datasets/0454f5f3-1d8c-464e-847d-541901eb021a
+# Autor: @antifascist_mountaineer (https://www.instagram.com/antifascist_mountaineer/)
+
 library(httr)
 library(raster)
 library(leaflet)
@@ -253,7 +258,7 @@ crs(r_template) <- "EPSG:4326"
 
 # vorverarbeitetes DEM im INCA-Grid (EPSG:4326, ~1 km), vorher lokal aus 10-m-DEM abgeleitet
 # Datei liegt im Repo unter data/DEM_Tirol_INCAgrid_1km_epsg4326.tif
-dem_inca <- raster("DEM_Tirol_INCAgrid_1km_epsg4326.tif")
+dem_inca <- raster("data/DEM_Tirol_INCAgrid_1km_epsg4326.tif")
 crs(dem_inca) <- "EPSG:4326"
 names(dem_inca) <- "elev_m"
 
@@ -309,7 +314,7 @@ H_t <- (hour - 12) * 15 * pi / 180
 
 # sinus der Sonnenhöhe (rad)
 sin_alpha_t <- sin(lat_center_rad) * sin(delta_t) +
-               cos(lat_center_rad) * cos(delta_t) * cos(H_t)
+  cos(lat_center_rad) * cos(delta_t) * cos(H_t)
 
 # Nacht -> 0
 sin_alpha_t[sin_alpha_t < 0] <- 0
@@ -479,7 +484,7 @@ names(climb_r)  <- "Climbability_0_1"
 # writeRaster(climb_r,      "Climbability_Tirol_1km.tif",       format = "GTiff", overwrite = TRUE)
 
 
-# 8) Interaktive Leaflet-Karte (Eisdicke) -----------------------------
+# 8) Interaktive Leaflet-Karte (Eisdicke & Climbability) -----------------
 
 # Display-Version der Raster für eine weichere Darstellung (nur fürs Plotten)
 # Original: ~1 km; hier z.B. auf ~250 m verfeinern (Faktor 4)
@@ -497,6 +502,9 @@ climb_disp <- disaggregate(
   method = "bilinear"
 )
 
+# Climbability = 0 unsichtbar machen, damit die Basiskarte gut sichtbar bleibt
+climb_disp_masked <- climb_disp
+climb_disp_masked[climb_disp_masked <= 0] <- NA
 
 max_h   <- cellStats(ice_thick_expo, max, na.rm = TRUE)
 col_fun <- colorRampPalette(c("white", "orange", "green", "darkgreen"))
@@ -507,14 +515,14 @@ pal_h <- colorNumeric(
   na.color = "transparent"
 )
 
-# (optional) Palette für Climbability
+# Palette für Climbability (0–1)
 pal_ci <- colorNumeric(
   palette  = rev(terrain.colors(100)),
   domain   = c(0, 1),
   na.color = "transparent"
 )
 
- d_today <- Sys.Date()
+d_today <- Sys.Date()
 
 m <- leaflet() |>
   addTiles(group = "OSM") |>
@@ -526,37 +534,42 @@ m <- leaflet() |>
     group   = "Eisdicke"
   ) |>
   addRasterImage(
-    climb_disp,
+    climb_disp_masked,
     colors  = pal_ci,
     opacity = 0.7,
     project = TRUE,
     group   = "Climbability"
   ) |>
   addLegend(
-    pal    = pal_h,
-    values = c(0, max_h),
-    title  = sprintf(
+    pal       = pal_h,
+    values    = c(0, max_h),
+    title     = sprintf(
       "Eisdicke (m)\nmit Exposition & Sonne (%s)",
       format(d_today, "%Y-%m-%d")
     ),
     labFormat = labelFormat(digits = 2),
-    position = "bottomright"
+    position  = "bottomright"
   ) |>
   addLegend(
-    pal    = pal_ci,
-    values = c(0, 1),
-    title  = "Climbability (0–1)",
-    labFormat = labelFormat(digits = 2),
-    position = "bottomleft"
+    pal       = pal_ci,
+    values    = c(0, 1),
+    title     = "Climbability (0–1)",
+    labFormat = labelFormat(digits = 1),
+    position  = "bottomleft"
   ) |>
   addLayersControl(
     baseGroups    = c("OSM"),
     overlayGroups = c("Eisdicke", "Climbability"),
     options       = layersControlOptions(collapsed = FALSE)
+  ) |>
+  addControl(
+    html = htmltools::HTML(
+      "<div style='font-size: 10px; background: rgba(255,255,255,0.9); padding: 4px 6px; border-radius: 4px; max-width: 260px; line-height: 1.3;'><strong>Quellen:</strong> INCA (GeoSphere Austria, <a href='https://doi.org/10.60669/6akt-5p05' target='_blank'>doi:10.60669/6akt-5p05</a>); DEM Tirol (<a href='https://www.data.gv.at/katalog/datasets/0454f5f3-1d8c-464e-847d-541901eb021a' target='_blank'>data.gv.at</a>)<br/><strong>Autor:</strong> <a href='https://www.instagram.com/antifascist_mountaineer/' target='_blank'>@antifascist_mountaineer</a></div>"
+    ),
+    position = "topleft"
   )
 
-# lokal ansehen (RStudio Viewer etc.)
-#m
-
-# für GitHub Pages / Web
+# für GitHub Pages / Web speichern
 saveWidget(m, "eisdicke_nordtirol.html", selfcontained = TRUE)
+
+m
