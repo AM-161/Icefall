@@ -2,7 +2,7 @@ name: Build FDH Ice Map daily
 
 on:
   schedule:
-    # Täglich um 04:00 UTC (05:00/06:00 bei dir, je nach Winterzeit)
+    # täglich um 04:00 UTC
     - cron: '0 4 * * *'
   workflow_dispatch:
 
@@ -11,7 +11,6 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      R_LIBS_USER: ${{ runner.temp }}/Rlibs
       TZ: Europe/Vienna
       NOT_CRAN: true
 
@@ -38,14 +37,13 @@ jobs:
       - name: Install R package dependencies
         uses: r-lib/actions/setup-r-dependencies@v2
         with:
-          # hier alle Pakete, die dein Script braucht
           extra-packages: |
             any::httr
             any::raster
             any::leaflet
             any::htmlwidgets
             any::ncdf4
-          # optional: Script scannen, um weitere Abhängigkeiten zu finden
+          # hier muss genau dein Script-Name stehen:
           needs: fdh_daily.R
 
       - name: Run FDH daily script
