@@ -1,4 +1,22 @@
 # =====================================================================
+# Urheberrechtlicher Hinweis / Nutzungseinschränkung
+# ---------------------------------------------------------------------
+# © 2025 Carlos Wydra. Alle Rechte vorbehalten.
+#
+# Dieses Skript wurde im Rahmen der Masterarbeit zur Kletterbarkeit
+# von Eisfällen in Nordtirol erstellt. Der Code darf ohne vorherige
+# ausdrückliche schriftliche Zustimmung des Autors weder ganz noch
+# teilweise kopiert, verändert, weiterverbreitet oder in eigene
+# Projekte (insbesondere kommerzielle Anwendungen oder proprietäre
+# Software) integriert werden.
+#
+# Eine Nutzung über das reine Lesen und Nachvollziehen im Kontext
+# dieser Masterarbeit hinaus ist nicht gestattet. Bei Rückfragen
+# oder einer gewünschten Nutzung bitte vorher Kontakt mit dem Autor
+# aufnehmen.
+# =====================================================================
+
+# =====================================================================
 # FDH-basiertes Eiswachstumsmodell für Nordtirol
 # - INCA 1h-Daten laden (ab 2025-11-01) in 2-Tages-Chunks
 # - FDH & MDH berechnen (Freezing & Melting Degree Hours)
