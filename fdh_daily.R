@@ -1031,12 +1031,18 @@ m <- m |>
   addControl(
     html = htmltools::HTML(
       paste0(
-        "<div style='font-size: 16px; background: rgba(255,255,255,0.9); padding: 4px 6px; border-radius: 4px; max-width: 300px; line-height: 1.4; margin-top: 4px;'>",
-        "<strong>Quellen:</strong> INCA (GeoSphere Austria, ",
-        "<a href='https://doi.org/10.60669/6akt-5p05' target='_blank'>doi:10.60669/6akt-5p05</a>); ",
-        "DEM Tirol (<a href='https://www.data.gv.at/katalog/datasets/0454f5f3-1d8c-464e-847d-541901eb021a' target='_blank'>data.gv.at</a>); ",
-        "NWP AROME (nwp-v1-1h-2500m)<br/>",
-        "<strong>Autor:</strong> <a href='https://www.instagram.com/antifascist_mountaineer/' target='_blank'>@antifascist_mountaineer</a><br/>",
+        "<div style='font-size: 16px; background: rgba(255,255,255,0.9); ",
+        "padding: 4px 6px; border-radius: 4px; max-width: 320px; ",
+        "line-height: 1.4; margin-top: 4px;'>",
+        "<strong>Quellen</strong><br/>",
+        "INCA (GeoSphere Austria, ",
+        "<a href='https://doi.org/10.60669/6akt-5p05' target='_blank'>doi:10.60669/6akt-5p05</a>)<br/>",
+        "NWP AROME (GeoSphere Austria, ",
+        "<a href='https://doi.org/10.60669/9zm8-s664' target='_blank'>doi:10.60669/9zm8-s664</a>)<br/>",
+        "DEM Tirol (",
+        "<a href='https://www.data.gv.at/katalog/datasets/0454f5f3-1d8c-464e-847d-541901eb021a' target='_blank'>data.gv.at</a>)<br/><br/>",
+        "<strong>Autor:</strong> ",
+        "<a href='https://www.instagram.com/antifascist_mountaineer/' target='_blank'>@antifascist_mountaineer</a><br/>",
         "<em>Letztes Update: ", last_update, "</em>",
         "</div>"
       )
