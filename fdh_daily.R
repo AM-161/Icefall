@@ -1,7 +1,7 @@
 # =====================================================================
 # Urheberrechtlicher Hinweis / Nutzungseinschränkung
 # ---------------------------------------------------------------------
-# © 2025 Carlos Wydra. Alle Rechte vorbehalten.
+# © 2025 Alle Rechte vorbehalten.
 #
 # Dieses Skript wurde im Rahmen der Masterarbeit zur Kletterbarkeit
 # von Eisfällen in Nordtirol erstellt. Der Code darf ohne vorherige
