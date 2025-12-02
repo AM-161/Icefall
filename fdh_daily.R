@@ -938,7 +938,7 @@ max_h_all <- vapply(
 max_h <- max(max_h_all, na.rm = TRUE)
 if (!is.finite(max_h) || max_h <= 0) max_h <- 1
 
-col_fun <- colorRampPalette(c("white", "orange", "green", "darkgreen"))
+col_fun <- colorRampPalette(c("#ffffff", "#c6dbef", "#6baed6", "#08519c"))
 
 pal_h <- colorNumeric(
   palette  = col_fun(100),
@@ -1205,3 +1205,4 @@ if (length(time_labels) > 0L) {
 
 # HTML speichern und Widget zurückgeben
 saveWidget(m, "eisdicke_nordtirol.html", selfcontained = TRUE)
+m
