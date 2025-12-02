@@ -940,6 +940,7 @@ if (!is.finite(max_h) || max_h <= 0) max_h <- 1
 
 col_fun <- colorRampPalette(c("#ffffff", "#c6dbef", "#6baed6", "#08519c"))
 
+
 pal_h <- colorNumeric(
   palette  = col_fun(100),
   domain   = c(0, max_h),
@@ -960,7 +961,16 @@ last_update <- format(Sys.time(), "%d.%m.%Y %H:%M UTC")
 ext <- extent(r_template)
 
 m <- leaflet() |>
-  addTiles(group = "OSM")
+  # Standard-OSM
+  addProviderTiles(
+    providers$OpenStreetMap,
+    group = "OSM"
+  ) |>
+  # Gelände / Topo-Karte
+  addProviderTiles(
+    providers$OpenTopoMap,
+    group = "Gelände (Topo)"
+  )
 
 # Alle Zeitschritte als Layer in zwei Gruppen: "Eisdicke" & "Climbability"
 if (length(ice_time_layers) > 0L) {
@@ -1007,33 +1017,39 @@ m <- m |>
     lat2 = ext@ymax
   ) |>
   addLegend(
-    pal       = pal_h,
-    values    = c(0, max_h),
-    title     = sprintf(
-      "Eisdicke (m) (%s)",
-      format(d_today, "%d.%m.%Y")
-    ),
-    labFormat = labelFormat(digits = 2),
-    position  = "bottomright"
-  ) |>
-  addLegend(
     pal       = pal_ci,
     values    = c(0, 1),
-    title     = "Climbability (0–1)",
+    title     = "Climbability",
     labFormat = labelFormat(digits = 1),
     position  = "bottomleft"
   ) |>
+  addLegend(
+    pal       = pal_h,
+    values    = c(0, max_h),
+    title     = "Eisdicke (m)",
+    labFormat = labelFormat(digits = 2),
+    position  = "bottomleft"
+  ) |>
   addLayersControl(
-    baseGroups    = c("OSM"),
+    baseGroups    = c("OSM", "Gelände (Topo)"),
     overlayGroups = c("Eisdicke", "Climbability"),
     options       = layersControlOptions(collapsed = FALSE)
   ) |>
   addControl(
+    position = "bottomright",
     html = htmltools::HTML(
       paste0(
-        "<div style='font-size: 16px; background: rgba(255,255,255,0.9); ",
-        "padding: 4px 6px; border-radius: 4px; max-width: 320px; ",
-        "line-height: 1.4; margin-top: 4px;'>",
+        "<div id='impressum-box' ",
+        "style='font-size: 14px; background: rgba(255,255,255,0.9);",
+        "padding: 6px 8px; border-radius: 6px; max-width: 340px;",
+        "line-height: 1.4;'>",
+        # --- Klickbarer Header ---
+        "<div id='impressum-header' ",
+        "style='font-weight:bold; cursor:pointer; margin-bottom:4px;'>",
+        "Impressum / Quellen ▾",
+        "</div>",
+        # --- Inhalt (startet versteckt) ---
+        "<div id='impressum-body' style='display:none;'>",
         "<strong>Quellen</strong><br/>",
         "INCA (GeoSphere Austria, ",
         "<a href='https://doi.org/10.60669/6akt-5p05' target='_blank'>doi:10.60669/6akt-5p05</a>)<br/>",
@@ -1044,11 +1060,30 @@ m <- m |>
         "<strong>Autor:</strong> ",
         "<a href='https://www.instagram.com/antifascist_mountaineer/' target='_blank'>@antifascist_mountaineer</a><br/>",
         "<em>Letztes Update: ", last_update, "</em>",
+        "</div>",
         "</div>"
       )
-    ),
-    position = "bottomleft"
+    )
   )
+
+m <- htmlwidgets::onRender(
+  m,
+  "
+  function(el, x) {
+    var header = el.querySelector('#impressum-header');
+    var body   = el.querySelector('#impressum-body');
+    if (!header || !body) return;
+
+    header.addEventListener('click', function() {
+      var visible = body.style.display !== 'none';
+      body.style.display = visible ? 'none' : 'block';
+      header.innerHTML = visible
+        ? 'Impressum / Quellen ▾'
+        : 'Impressum / Quellen ▴';
+    });
+  }
+  "
+)
 
 # Debug: Leaflet-Methoden
 if (!is.null(m$x$calls)) {
@@ -1070,6 +1105,17 @@ if (length(time_labels) > 0L) {
     "
     function(el, x) {
       var map    = this;
+      var lc = el.getElementsByClassName('leaflet-control-layers-expanded')[0]
+               || el.getElementsByClassName('leaflet-control-layers')[0];
+      if (lc) {
+        // Gesamt-Skalierung
+         lc.style.marginTop  = '10px';  // weiter nach unten
+          lc.style.marginRight = '90px'; // etwas nach links
+        lc.style.transform = 'scale(1.5)';      
+        lc.style.transformOrigin = 'top left';
+        lc.style.padding = '12px 15px';
+        lc.style.fontSize = '16px';
+      }
       window._eisMap = map;
       var labels = %s;
       var nSteps = %d;
@@ -1147,6 +1193,8 @@ if (length(time_labels) > 0L) {
         div.style.padding      = '8px 10px';
         div.style.borderRadius = '6px';
         div.style.minWidth     = '260px';
+        div.style.marginTop  = '70px';  // weiter runter
+        div.style.marginRight = '10px'; // etwas nach links
 
         var title = document.createElement('div');
         title.style.fontSize   = '16px';
@@ -1205,4 +1253,3 @@ if (length(time_labels) > 0L) {
 
 # HTML speichern und Widget zurückgeben
 saveWidget(m, "eisdicke_nordtirol.html", selfcontained = TRUE)
-m
