@@ -353,11 +353,48 @@ weight_time_t <- exp(-age_days / tau_days)  # 1 für jetzt, -> 0 für weit zurü
 # --- Zeitachsen-Infos für historischen Eisdicken-Zeitverlauf ---
 t_start <- min(time_vec, na.rm = TRUE)
 time_offset_hours <- as.numeric(difftime(time_vec, t_start, units = "hours"))
-snap_hours_hist <- seq(
-  from = 0,
-  to   = floor(max(time_offset_hours, na.rm = TRUE)),
-  by   = 24
+
+# Zeitzonen-Konvertierung: alle Zeiten als Lokalzeit (Europe/Vienna)
+time_local_all <- as.POSIXct(format(time_vec, tz = "Europe/Vienna", usetz = TRUE),
+                             tz = "Europe/Vienna")
+
+t_min_local <- min(time_local_all, na.rm = TRUE)
+t_max_local <- max(time_local_all, na.rm = TRUE)
+
+# 1) erster 07:00-Snapshot in Lokalzeit
+t0_local <- as.POSIXct(
+  paste0(format(t_min_local, "%Y-%m-%d"), " 07:00:00"),
+  tz = "Europe/Vienna"
 )
+
+# wenn wir an diesem Tag erst NACH 07:00 einsteigen -> erster Snapshot ist am nächsten Tag 07:00
+if (t0_local < t_min_local) {
+  t0_local <- t0_local + 24 * 3600
+}
+
+# 2) letzter 07:00-Snapshot, der noch voll in den Daten liegt
+t_last_local <- as.POSIXct(
+  paste0(format(t_max_local, "%Y-%m-%d"), " 07:00:00"),
+  tz = "Europe/Vienna"
+)
+
+# wenn der letzte 07:00-Punkt in der Zukunft liegt -> einen Tag zurück
+if (t_last_local > t_max_local) {
+  t_last_local <- t_last_local - 24 * 3600
+}
+
+# 3) Sequenz der täglichen 07:00-Zeiten
+if (t_last_local < t0_local) {
+  # noch kein kompletter Tag erreicht -> keine historischen Snapshots
+  snap_hours_hist <- numeric(0)
+} else {
+  snap_times_local <- seq(from = t0_local, to = t_last_local, by = "1 day")
+  # zurück nach UTC, weil time_vec / t_start in UTC sind
+  snap_times_utc   <- as.POSIXct(format(snap_times_local, tz = "UTC", usetz = TRUE),
+                                 tz = "UTC")
+  snap_hours_hist  <- as.numeric(difftime(snap_times_utc, t_start, units = "hours"))
+}
+
 FDH_hist_layers <- list()
 FDH_hist_labels <- character(0)
 FDH_hist_times  <- as.POSIXct(character(0), tz = "UTC")
@@ -636,6 +673,7 @@ param_str_nwp  <- paste(parameters_nwp, collapse = ",")
 
 # Letzte INCA-Zeit als "jetzt" (UTC)
 t_now    <- max(inca_nordtirol_all$time, na.rm = TRUE)
+t0 <- t_now   # Analysezeit = letzte INCA-Stunde, Referenz für Prognose-Zeiten
 fc_h_max <- 60  # Stunden Vorhersage (max. ~60 h)
 
 t_fc_end <- t_now + fc_h_max * 3600
@@ -745,16 +783,82 @@ if (file.exists(outfile_fc)) {
       s
     })
     
-    # 8.5 Ziel-Zeitpunkte (Slider-Schritte, in Stunden)
-    target_hours_all <- c(0, 12, 24, 36, 48, 60)
-    target_hours_all <- target_hours_all[target_hours_all <= max(lead_hours) + 1e-6]
+    # 8.5 Ziel-Zeitpunkte für die Vorhersage:
+    #     - immer 07:00 Lokalzeit (Europe/Vienna)
+    #     - plus optional 0 h = Analysezeit
+    # ------------------------------------------------
     
-    target_times  <- t_now + target_hours_all * 3600
-    target_labels <- ifelse(
-      target_hours_all == 0,
-      paste0(format(target_times, "%d.%m.%Y"), " (Jetzt)"),
-      paste0(format(target_times, "%d.%m.%Y"), " (+", target_hours_all, " h)")
+    # Forecast-Zeiten in Lokalzeit
+    time_fc_local <- as.POSIXct(
+      format(time_fc, tz = "Europe/Vienna", usetz = TRUE),
+      tz = "Europe/Vienna"
     )
+    
+    # Analysezeit t0 auch nach Lokalzeit
+    t0_local <- as.POSIXct(
+      format(t0, tz = "Europe/Vienna", usetz = TRUE),
+      tz = "Europe/Vienna"
+    )
+    
+    # Datumsspanne für die Vorhersage
+    date_seq <- seq.Date(
+      from = as.Date(t0_local),
+      to   = as.Date(max(time_fc_local, na.rm = TRUE)),
+      by   = "day"
+    )
+    
+    # Kandidaten: jeden Tag 07:00 Lokalzeit
+    target_times_local <- as.POSIXct(
+      paste0(date_seq, " 07:00:00"),
+      tz = "Europe/Vienna"
+    )
+    
+    # Nur Zeiten >= Analysezeit und <= letztem Forecast-Zeitpunkt behalten
+    target_times_local <- target_times_local[
+      target_times_local >= t0_local &
+        target_times_local <= max(time_fc_local, na.rm = TRUE)
+    ]
+    
+    # Wenn nichts übrig bleibt, keine 07-Uhr-Snapshots
+    if (length(target_times_local) == 0) {
+      target_hours_07  <- numeric(0)
+      target_labels_07 <- character(0)
+    } else {
+      # zurück nach UTC (weil t0 / time_fc in UTC sind)
+      target_times_utc <- as.POSIXct(
+        format(target_times_local, tz = "UTC", usetz = TRUE),
+        tz = "UTC"
+      )
+      
+      # Stundenabstand relativ zur Analysezeit t0
+      target_hours_07 <- as.numeric(difftime(target_times_utc, t0, units = "hours"))
+      
+      # Labels schön mit Datum + 07:00 Lokalzeit
+      target_labels_07 <- format(target_times_local, "%d.%m.%Y, 07:00")
+    }
+    
+    # Jetzt komplette Liste der Zielstunden bauen:
+    #   - 0 h = Analysezeit (optional, aber meistens sinnvoll)
+    #   - danach alle 07:00-Snapshots
+    target_hours_all  <- c(0, target_hours_07)
+    target_labels_all <- c(
+      paste0(format(t0_local, "%d.%m.%Y, %H:%M"), " (Analyse)"),
+      target_labels_07
+    )
+    
+    # Sicherheit: Duplikate entfernen / sortieren
+    ord <- order(target_hours_all)
+    target_hours_all  <- target_hours_all[ord]
+    target_labels_all <- target_labels_all[ord]
+    
+    # Noch zur Sicherheit auf den realen Horizont beschneiden
+    target_hours_all  <- target_hours_all[target_hours_all <= max(lead_hours) + 1e-6]
+    target_labels_all <- target_labels_all[seq_along(target_hours_all)]
+    
+    # final
+    target_times  <- t0 + target_hours_all * 3600
+    target_labels <- target_labels_all
+    
     
     ice_fc_layers   <- vector("list", length(target_hours_all))
     climb_fc_layers <- vector("list", length(target_hours_all))
@@ -1253,3 +1357,5 @@ if (length(time_labels) > 0L) {
 
 # HTML speichern und Widget zurückgeben
 saveWidget(m, "eisdicke_nordtirol.html", selfcontained = TRUE)
+m
+
