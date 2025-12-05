@@ -1357,5 +1357,3 @@ if (length(time_labels) > 0L) {
 
 # HTML speichern und Widget zurückgeben
 saveWidget(m, "eisdicke_nordtirol.html", selfcontained = TRUE)
-m
-
