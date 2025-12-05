@@ -1,5 +1,5 @@
 # =====================================================================
-# Urheberrechtlicher Hinweis / Nutzungseinschränkung
+# Urheberrechtlicher Hinweis / Nutzungseinsschränkung
 # ---------------------------------------------------------------------
 # © 2025 Alle Rechte vorbehalten.
 #
@@ -18,23 +18,7 @@
 
 # =====================================================================
 # FDH-basiertes Eiswachstumsmodell für Nordtirol
-# - INCA 1h-Daten laden (ab 2025-11-01) in 2-Tages-Chunks
-# - FDH & MDH berechnen (Freezing & Melting Degree Hours)
-# - Wind- und Feuchteeinfluss (Konvektion / latente Wärme) berücksichtigen
-# - zeitaufgelöste Sonnenhöhe (Datum + Tageszeit) + Exposition (DEM-basiert)
-# - zeitlich gewichtete Temperaturgeschichte (jüngere Stunden stärker)
-# - effektive FDH -> Eisdicke
-# - Climbability-Index (0–1) für aktuelle Bedingungen
-# - NWP-Vorhersage (AROME, nwp-v1-1h-2500m) für ~60 h
-# - Prognose-Eisdicke & -Climbability für mehrere Zeitschritte (0, +12, +24, +36, +48, +60 h)
-# - interaktive Leaflet-Karte mit Slider für Prognose (eisdicke_nordtirol.html)
 # =====================================================================
-
-# Datenquellen:
-#   INCA (GeoSphere Austria), DOI: https://doi.org/10.60669/6akt-5p05
-#   DEM Tirol: https://www.data.gv.at/katalog/datasets/0454f5f3-1d8c-464e-847d-541901eb021a
-#   NWP AROME (nwp-v1-1h-2500m): siehe GeoSphere API
-# Autor: @antifascist_mountaineer (https://www.instagram.com/antifascist_mountaineer/)
 
 library(httr)
 library(raster)
@@ -42,12 +26,11 @@ library(leaflet)
 library(htmlwidgets)
 library(ncdf4)
 
-
 # 0) Zeitraum & Gebiet -------------------------------------------------
 
-start_all    <- as.Date("2025-11-01")        # Startdatum der Saison
-end_all      <- Sys.Date()                    # bis heute
-chunk_days   <- 2                             # 2-Tages-Chunks (API-Limit)
+start_all    <- as.Date("2025-11-01") # Startdatum der Saison
+end_all      <- Sys.Date()           # bis heute
+chunk_days   <- 2                    # 2-Tages-Chunks (API-Limit)
 chunk_starts <- seq.Date(start_all, end_all, by = chunk_days)
 
 # Nordtirol-BBox in WGS84
@@ -59,27 +42,25 @@ bbox <- c(
 )
 
 # INCA-Parameter (erweitert für Wind, Feuchte etc.)
-parameters <- c("RR", "T2M", "RH2M", "UU", "VV", "GL", "P0", "TD2M")
-param_str  <- paste(parameters, collapse = ",")
-
+parameters   <- c("RR", "T2M", "RH2M", "UU", "VV", "GL", "P0", "TD2M")
+param_str    <- paste(parameters, collapse = ",")
 base_url_inca <- "https://dataset.api.hub.geosphere.at/v1/grid/historical/inca-v1-1h-1km"
 
 out_dir <- "data/inca_nordtirol"
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 
-nc_files <- character(0)
-
+nc_files <- character(length(chunk_starts))
 
 # 1) INCA-Daten chunkweise laden (existierende Dateien überspringen) ---
 
-for (cs in chunk_starts) {
-  cs <- as.Date(cs)
+for (idx in seq_along(chunk_starts)) {
+  cs <- as.Date(chunk_starts[idx])
   ce <- as.Date(min(cs + (chunk_days - 1), end_all))
   
-  message("Chunk: ", as.character(cs), " bis ", as.character(ce))
+  message("Chunk: ", cs, " bis ", ce)
   
-  start_time <- paste0(format(cs, "%Y-%m-%d"), "T00:00")
-  end_time   <- paste0(format(ce, "%Y-%m-%d"), "T23:00")
+  start_time <- sprintf("%sT00:00", format(cs, "%Y-%m-%d"))
+  end_time   <- sprintf("%sT23:00", format(ce, "%Y-%m-%d"))
   
   outfile <- file.path(
     out_dir,
@@ -88,7 +69,6 @@ for (cs in chunk_starts) {
             format(ce, "%Y%m%d"))
   )
   
-  # schon vorhanden -> Download überspringen
   if (file.exists(outfile) && file.info(outfile)$size > 0) {
     message("  -> übersprungen (existiert): ", outfile)
   } else {
@@ -108,15 +88,13 @@ for (cs in chunk_starts) {
     )
     stop_for_status(resp)
     
-    sz <- file.info(outfile)$size
-    message("  -> gespeichert: ", outfile, " (", sz, " Bytes)")
+    message("  -> gespeichert: ", outfile, " (", file.info(outfile)$size, " Bytes)")
   }
   
-  nc_files <- c(nc_files, outfile)
+  nc_files[idx] <- outfile
 }
 
 nc_files <- sort(unique(nc_files))
-
 
 # 2) Alle NetCDFs einlesen und in ein Objekt packen --------------------
 
@@ -129,6 +107,7 @@ convert_nc_time <- function(time_vals, time_units) {
   unit_str   <- sub(" since.*", "", time_units)
   origin_str <- sub(".*since ", "", time_units)
   origin     <- as.POSIXct(origin_str, tz = "UTC")
+  
   if (grepl("hour", unit_str, ignore.case = TRUE)) {
     origin + time_vals * 3600
   } else if (grepl("second", unit_str, ignore.case = TRUE)) {
@@ -156,16 +135,14 @@ nx <- dim(lon0)[1]
 ny <- dim(lon0)[2]
 
 time_dim_name <- names(nc0$dim)[grep("time", tolower(names(nc0$dim)))[1]]
-
-vars_found <- intersect(vars_wanted, varnames0)
+vars_found    <- intersect(vars_wanted, varnames0)
 nc_close(nc0)
 
 # 2.2 Zeitlängen pro Datei
 nt_per_file <- integer(length(nc_files))
 for (i in seq_along(nc_files)) {
   nc <- nc_open(nc_files[i])
-  time_vals <- ncvar_get(nc, time_dim_name)
-  nt_per_file[i] <- length(time_vals)
+  nt_per_file[i] <- length(ncvar_get(nc, time_dim_name))
   nc_close(nc)
 }
 
@@ -179,7 +156,7 @@ names(inca_data) <- vars_found
 
 # 2.4 Daten einlesen
 
-pos <- 1
+pos <- 1L
 for (i in seq_along(nc_files)) {
   nc <- nc_open(nc_files[i])
   
@@ -187,12 +164,11 @@ for (i in seq_along(nc_files)) {
   time_units <- ncatt_get(nc, time_dim_name, "units")$value
   nt_i       <- length(time_vals)
   
-  idx <- pos:(pos + nt_i - 1)
+  idx <- pos:(pos + nt_i - 1L)
   time_all[idx] <- convert_nc_time(time_vals, time_units)
   
   for (v in vars_found) {
-    arr_i <- ncvar_get(nc, v)    # [nx, ny, nt_i]
-    inca_data[[v]][ , , idx] <- arr_i
+    inca_data[[v]][ , , idx] <- ncvar_get(nc, v)
   }
   
   nc_close(nc)
@@ -206,10 +182,8 @@ inca_nordtirol_all <- list(
   data = inca_data
 )
 
-
 # 3) FDH/MDH (stundenweise) + Orientierung + Raster-Template ----------
 
-# Basis-Arrays (C, %, m/s)
 T2M_arr <- inca_nordtirol_all$data$T2M   # °C [nx, ny, nt]
 RH_arr  <- inca_nordtirol_all$data$RH2M  # %  [nx, ny, nt]
 UU_arr  <- inca_nordtirol_all$data$UU    # m/s
@@ -225,11 +199,10 @@ nt <- dim(T2M_arr)[3]
 # 3.1 Orientierung (S->N, W->E) für alle Felder
 
 lat_mean_j <- colMeans(lat, na.rm = TRUE)
-if (lat_mean_j[1] < lat_mean_j[length(lat_mean_j)]) {
+if (lat_mean_j[1] < tail(lat_mean_j, 1)) {
   idx_j <- ny:1
   lon   <- lon[, idx_j]
   lat   <- lat[, idx_j]
-  
   T2M_arr <- T2M_arr[, idx_j, , drop = FALSE]
   RH_arr  <- RH_arr[,  idx_j, , drop = FALSE]
   UU_arr  <- UU_arr[,  idx_j, , drop = FALSE]
@@ -237,11 +210,10 @@ if (lat_mean_j[1] < lat_mean_j[length(lat_mean_j)]) {
 }
 
 lon_mean_i <- rowMeans(lon, na.rm = TRUE)
-if (lon_mean_i[1] > lon_mean_i[length(lon_mean_i)]) {
+if (lon_mean_i[1] > tail(lon_mean_i, 1)) {
   idx_i <- nx:1
   lon   <- lon[idx_i, ]
   lat   <- lat[idx_i, ]
-  
   T2M_arr <- T2M_arr[idx_i, , , drop = FALSE]
   RH_arr  <- RH_arr[idx_i, , , drop = FALSE]
   UU_arr  <- UU_arr[idx_i, , , drop = FALSE]
@@ -254,19 +226,16 @@ nt <- dim(T2M_arr)[3]
 
 # 3.2 FDH & MDH (C·h) + Windgeschwindigkeit
 
-FDH_hourly <- pmax(-T2M_arr, 0)   # T < 0
-MDH_hourly <- pmax( T2M_arr, 0)   # T > 0
+FDH_hourly <- pmax(-T2M_arr, 0)      # T < 0
+MDH_hourly <- pmax( T2M_arr, 0)      # T > 0
+W_arr      <- sqrt(UU_arr^2 + VV_arr^2)   # m/s, [nx, ny, nt]
 
-W_arr <- sqrt(UU_arr^2 + VV_arr^2)   # m/s, [nx, ny, nt]
-
-# Referenz-Wind (für Normierung)
 wind_ref <- mean(W_arr, na.rm = TRUE)
 if (!is.finite(wind_ref) || wind_ref <= 0) wind_ref <- 5  # fallback
 
 # 3.3 "Plain FDH" (ohne Korrekturen) + Raster-Template
 
-FDH_sum_plain <- apply(FDH_hourly, c(1, 2), sum, na.rm = TRUE)  # [nx, ny]
-FDH_mat_plain <- t(FDH_sum_plain)                               # [ny, nx]
+FDH_mat_plain <- t(apply(FDH_hourly, c(1, 2), sum, na.rm = TRUE)) # [ny, nx]
 
 r_template <- raster(FDH_mat_plain)
 extent(r_template) <- c(min(lon, na.rm = TRUE),
@@ -275,41 +244,27 @@ extent(r_template) <- c(min(lon, na.rm = TRUE),
                         max(lat, na.rm = TRUE))
 crs(r_template) <- "EPSG:4326"
 
-
 # 4) DEM auf INCA-Grid + Expositionsindex (solar_index_ij) -----------
-
-# vorverarbeitetes DEM im INCA-Grid (EPSG:4326, ~1 km),
-# vorher lokal aus 10-m-DEM abgeleitet
-# Datei liegt im Repo im Hauptverzeichnis unter DEM_Tirol_INCAgrid_1km_epsg4326.tif
 
 dem_inca <- raster("DEM_Tirol_INCAgrid_1km_epsg4326.tif")
 crs(dem_inca) <- "EPSG:4326"
 names(dem_inca) <- "elev_m"
 
-# Slope & Aspect im INCA-Grid
 sl_as       <- terrain(dem_inca, opt = c("slope", "aspect"), unit = "degrees")
-aspect_inca <- sl_as[["aspect"]]   # 0°=Ost, 90°=Nord, etc.
+aspect_inca <- sl_as[["aspect"]]
 
-# Aspect so drehen, dass 0° = Nord
 aspect_rad_from_north <- (aspect_inca - 90) * pi / 180
-
-# +1 = Nordhang, -1 = Südhang
-northness_r <- cos(aspect_rad_from_north)
+northness_r           <- cos(aspect_rad_from_north)
 
 # 0 = Nord (schattig), 1 = Süd (besonnt)
-solar_index_r <- (1 - northness_r) / 2
-
-# Raster -> Matrix [nx, ny] passend zu FDH_hourly
-solar_mat      <- as.matrix(solar_index_r)  # [nrow = ny, ncol = nx]
-solar_index_ij <- t(solar_mat)              # [nx, ny]
-
+solar_index_r  <- (1 - northness_r) / 2
+solar_index_ij <- t(as.matrix(solar_index_r))  # [nx, ny]
+solar_index_r[is.na(solar_index_r[])] <- 0.5
 
 # 5) Zeitabhängige Sonnenhöhe + Zeit-Gewichtung ----------------------
 
-# Zeitvektor (UTC)
 time_vec <- inca_nordtirol_all$time
 
-# Beschränken: zur Sicherheit auf nt Einträge
 if (length(time_vec) != nt) {
   if (length(time_vec) > nt) {
     time_vec <- tail(time_vec, nt)
@@ -323,73 +278,50 @@ time_local <- as.POSIXlt(time_vec, tz = "Europe/Vienna")
 doy  <- time_local$yday + 1
 hour <- time_local$hour + time_local$min / 60 + time_local$sec / 3600
 
-# Sonnen-Deklination (rad) pro Zeitpunkt
 delta_t <- 23.44 * pi/180 * sin(2 * pi * (284 + doy) / 365)
 
-# mittlere Breite des Gebiets
 lat_center_deg <- (min(lat, na.rm = TRUE) + max(lat, na.rm = TRUE)) / 2
 lat_center_rad <- lat_center_deg * pi / 180
 
-# Stundenwinkel (rad): 0 bei 12:00, ± am Morgen/Abend
 H_t <- (hour - 12) * 15 * pi / 180
 
-# sinus der Sonnenhöhe (rad)
 sin_alpha_t <- sin(lat_center_rad) * sin(delta_t) +
   cos(lat_center_rad) * cos(delta_t) * cos(H_t)
-
-# Nacht -> 0
 sin_alpha_t[sin_alpha_t < 0] <- 0
 
-# Faktor 0–1 (0 = Nacht, 1 = max. Sonnenstand)
 solar_height_factor_t <- sin_alpha_t
 
-# Zeit-Gewichtung (neuere Stunden wichtiger)
-max_time  <- max(time_vec, na.rm = TRUE)
-age_days  <- as.numeric(difftime(max_time, time_vec, units = "days"))
+max_time <- max(time_vec, na.rm = TRUE)
+age_days <- as.numeric(difftime(max_time, time_vec, units = "days"))
 
-tau_days  <- 10   # e-Falldauer ~10 Tage (ältere Beiträge werden stark abgewertet)
-weight_time_t <- exp(-age_days / tau_days)  # 1 für jetzt, -> 0 für weit zurück
+tau_days       <- 10
+weight_time_t  <- exp(-age_days / tau_days)
 
-# --- Zeitachsen-Infos für historischen Eisdicken-Zeitverlauf ---
-t_start <- min(time_vec, na.rm = TRUE)
+t_start          <- min(time_vec, na.rm = TRUE)
 time_offset_hours <- as.numeric(difftime(time_vec, t_start, units = "hours"))
 
-# Zeitzonen-Konvertierung: alle Zeiten als Lokalzeit (Europe/Vienna)
+# Lokalzeit (für Hist-Snapshots)
 time_local_all <- as.POSIXct(format(time_vec, tz = "Europe/Vienna", usetz = TRUE),
                              tz = "Europe/Vienna")
-
 t_min_local <- min(time_local_all, na.rm = TRUE)
 t_max_local <- max(time_local_all, na.rm = TRUE)
 
-# 1) erster 07:00-Snapshot in Lokalzeit
 t0_local <- as.POSIXct(
   paste0(format(t_min_local, "%Y-%m-%d"), " 07:00:00"),
   tz = "Europe/Vienna"
 )
+if (t0_local < t_min_local) t0_local <- t0_local + 24 * 3600
 
-# wenn wir an diesem Tag erst NACH 07:00 einsteigen -> erster Snapshot ist am nächsten Tag 07:00
-if (t0_local < t_min_local) {
-  t0_local <- t0_local + 24 * 3600
-}
-
-# 2) letzter 07:00-Snapshot, der noch voll in den Daten liegt
 t_last_local <- as.POSIXct(
   paste0(format(t_max_local, "%Y-%m-%d"), " 07:00:00"),
   tz = "Europe/Vienna"
 )
+if (t_last_local > t_max_local) t_last_local <- t_last_local - 24 * 3600
 
-# wenn der letzte 07:00-Punkt in der Zukunft liegt -> einen Tag zurück
-if (t_last_local > t_max_local) {
-  t_last_local <- t_last_local - 24 * 3600
-}
-
-# 3) Sequenz der täglichen 07:00-Zeiten
 if (t_last_local < t0_local) {
-  # noch kein kompletter Tag erreicht -> keine historischen Snapshots
   snap_hours_hist <- numeric(0)
 } else {
   snap_times_local <- seq(from = t0_local, to = t_last_local, by = "1 day")
-  # zurück nach UTC, weil time_vec / t_start in UTC sind
   snap_times_utc   <- as.POSIXct(format(snap_times_local, tz = "UTC", usetz = TRUE),
                                  tz = "UTC")
   snap_hours_hist  <- as.numeric(difftime(snap_times_utc, t_start, units = "hours"))
@@ -398,58 +330,49 @@ if (t_last_local < t0_local) {
 FDH_hist_layers <- list()
 FDH_hist_labels <- character(0)
 FDH_hist_times  <- as.POSIXct(character(0), tz = "UTC")
-snap_idx_hist <- 1
-
+snap_idx_hist   <- 1L
 
 # 6) Effektive FDH (FDHm + Wind + Feuchte + Strahlung + Zeit) ---------
 
-# Parameter für physikalische Korrekturen
-k_expo  <- 0.5   # Stärke des Strahlungs-/Expositions-Effekts (0–1)
-
-k_wind  <- 0.5   # Einfluss der Windabweichung auf den konvektiven Term
-wind_min <- 0.5  # min. Faktor
-wind_max <- 2.0  # max. Faktor
-
-rh_opt  <- 0.7   # optimale rel. Feuchte (als Anteil, ~70 %)
-rh_sig  <- 0.15  # Breite des Feuchte-Peaks
-
-k_melt  <- 1.2   # Gewichtung der MDH (Schmelz-Effekt)
+k_expo   <- 0.5
+k_wind   <- 0.5
+wind_min <- 0.5
+wind_max <- 2.0
+rh_opt   <- 0.7
+rh_sig   <- 0.15
+k_melt   <- 1.2
 
 FDH_sum_eff <- matrix(0, nrow = nx, ncol = ny)
 
 for (k in seq_len(nt)) {
-  # Basisfelder für diesen Zeitpunkt
   FDH_k <- FDH_hourly[ , , k]
   MDH_k <- MDH_hourly[ , , k]
   W_k   <- W_arr[ , , k]
-  RH_k  <- RH_arr[ , , k] / 100  # -> 0..1
+  RH_k  <- RH_arr[ , , k] / 100
   
-  # Wind-Faktor (konvektive Kühlung)
   wind_norm <- (W_k - wind_ref) / wind_ref
   f_wind    <- 1 + k_wind * wind_norm
   f_wind[!is.finite(f_wind)] <- 1
   f_wind <- pmax(wind_min, pmin(wind_max, f_wind))
   
-  # Feuchte-Faktor für Wachstum (Peak bei rh_opt, 0.5..1)
   f_rh_peak <- exp(- (RH_k - rh_opt)^2 / (2 * rh_sig^2))
   f_rh      <- 0.5 + 0.5 * f_rh_peak
   
-  # Strahlungs-/Expositions-Faktor (reduziert Wachstum bei starker Sonne auf Südhängen)
-  f_rad <- 1 - k_expo * solar_height_factor_t[k] * solar_index_ij
+  s_height <- solar_height_factor_t[k]
+  if (s_height == 0) {
+    f_rad <- 1
+  } else {
+    f_rad <- 1 - k_expo * s_height * solar_index_ij
+  }
   f_rad[!is.finite(f_rad)] <- 1
   f_rad <- pmax(0, pmin(1, f_rad))
   
-  # Zeit-Gewichtung
   f_time <- weight_time_t[k]
   if (!is.finite(f_time)) f_time <- 1
   
-  # Effektive Freezing Degree Hours (mit Wind, Feuchte, Strahlung, Zeit)
   FDH_eff_k <- FDH_k * f_wind * f_rh * f_rad * f_time
-  
-  # Effektive Melting Degree Hours (Schmelz-Term, zeitgewichtet)
   MDH_eff_k <- MDH_k * k_melt * f_time
   
-  # Netto-Beitrag (kann theoretisch auch negativ sein)
   FDH_sum_eff <- FDH_sum_eff + (FDH_eff_k - MDH_eff_k)
   
   # Historische FDH-Schnappschüsse für Zeit-Slider (täglich)
@@ -460,46 +383,62 @@ for (k in seq_len(nt)) {
     FDH_k_snap <- FDH_sum_eff
     FDH_k_snap[FDH_k_snap < 0] <- 0
     
-    FDH_mat_snap <- t(FDH_k_snap)
-    r_FDH_snap <- raster(FDH_mat_snap)
+    r_FDH_snap <- raster(t(FDH_k_snap))
     extent(r_FDH_snap) <- extent(r_template)
     crs(r_FDH_snap)    <- crs(r_template)
     
     label_time <- t_start + snap_hours_hist[snap_idx_hist] * 3600
     label_str  <- format(label_time, "%d.%m.%Y")
     
-    FDH_hist_layers[[length(FDH_hist_layers) + 1]] <- r_FDH_snap
+    FDH_hist_layers[[length(FDH_hist_layers) + 1L]] <- r_FDH_snap
     FDH_hist_labels <- c(FDH_hist_labels, label_str)
     FDH_hist_times  <- c(FDH_hist_times, label_time)
     
-    snap_idx_hist <- snap_idx_hist + 1
+    snap_idx_hist <- snap_idx_hist + 1L
   }
 }
 
-
-# Physikalisch: kein "negatives Eis" -> untere Grenze 0
 FDH_sum_eff[FDH_sum_eff < 0] <- 0
 
-# Effektive FDH -> Raster
-FDH_mat_eff <- t(FDH_sum_eff)   # [ny, nx]
-
-r_FDH_eff <- raster(FDH_mat_eff)
+r_FDH_eff <- raster(t(FDH_sum_eff))
 extent(r_FDH_eff) <- extent(r_template)
 crs(r_FDH_eff)    <- crs(r_template)
 names(r_FDH_eff)  <- "FDH_eff_C_h"
 
-
 # 7) Effektive FDH -> Eisdicke + Climbability-Index (aktuell) ---------
 
-# Energie -> Eisdicke (einfacher linearer Ansatz)
-h_c      <- 30       # W m^-2 K^-1
-rho_i    <- 880      # kg m^-3
-Lf       <- 334000   # J kg^-1
-FDH_crit <- 30        # °C·h; Schwellwert hier deaktiviert (sonst im Frühwinter überall NA)
+h_c      <- 30
+rho_i    <- 880
+Lf       <- 334000
+FDH_crit <- 30
 
-alpha <- h_c * 3600 / (rho_i * Lf)   # m / (°C·h)
+alpha <- h_c * 3600 / (rho_i * Lf)
 
-# Historische Eisdicken-Layer aus FDH_hist_layers (falls vorhanden)
+# Hilfsfunktion Scores (für mehrfachen Gebrauch)
+score_h_fun <- function(h, h_min, h_opt) {
+  s <- (h - h_min) / (h_opt - h_min)
+  s[h <= h_min] <- 0
+  s[h >= h_opt] <- 1
+  s[!is.finite(s)] <- 0
+  s
+}
+
+score_T_fun <- function(Tv, T_opt, T_min, T_max, range_T) {
+  s <- 1 - abs(Tv - T_opt) / range_T
+  s[Tv <= T_min | Tv >= T_max] <- 0
+  s[s < 0] <- 0
+  s[!is.finite(s)] <- 0
+  s
+}
+
+score_RH_fun <- function(rh, RH_opt, RH_sig) {
+  peak <- exp(- (rh - RH_opt)^2 / (2 * RH_sig^2))
+  s <- peak
+  s[!is.finite(s)] <- 0
+  s
+}
+
+# Historische Eisdicken-Layer
 ice_hist_layers <- list()
 ice_hist_labels <- character(0)
 
@@ -507,7 +446,7 @@ if (length(FDH_hist_layers) > 0) {
   ice_hist_layers <- vector("list", length(FDH_hist_layers))
   ice_hist_labels <- FDH_hist_labels
   for (i in seq_along(FDH_hist_layers)) {
-    r_fd <- FDH_hist_layers[[i]]
+    r_fd  <- FDH_hist_layers[[i]]
     ice_i <- r_fd * alpha
     ice_i[r_fd < FDH_crit] <- NA
     names(ice_i) <- paste0("h_pot_expo_hist_", ice_hist_labels[i])
@@ -515,128 +454,78 @@ if (length(FDH_hist_layers) > 0) {
   }
 }
 
-
 ice_thick_expo <- r_FDH_eff * alpha
 ice_thick_expo[r_FDH_eff < FDH_crit] <- NA
 names(ice_thick_expo) <- "h_pot_expo_m"
 
-# Matrix der Eisdicke (für aktuellen Climbability)
-h_mat_ij <- FDH_sum_eff * alpha   # [nx, ny]
+h_mat_ij <- FDH_sum_eff * alpha
 
-# Aktuelle Bedingungen (letzter Zeitschritt)
 T_last_ij  <- T2M_arr[ , , nt]
 RH_last_ij <- RH_arr[ , , nt] / 100
 
-# 3-Tages-Mittel (Tr3) der Lufttemperatur
-n_tr3   <- min(72, nt)   # 72 h = 3 Tage
+n_tr3   <- min(72, nt)
 idx_tr3 <- (nt - n_tr3 + 1):nt
 
 Tr3_ij <- apply(T2M_arr[ , , idx_tr3, drop = FALSE], c(1, 2), mean, na.rm = TRUE)
 
-# Scoring-Parameter (wie bisher)
+# 7.1 Dicke-Score
+h_min <- 0.10
+h_opt <- 0.50
+score_h <- score_h_fun(h_mat_ij, h_min, h_opt)
 
-# 7.1 Dicke-Score: 0 unter h_min, 1 ab h_opt
-h_min <- 0.10   # 10 cm: untere Grenze für "überhaupt Eis da"
-h_opt <- 0.50   # 50 cm: "gut kletterbar"
-
-score_h <- (h_mat_ij - h_min) / (h_opt - h_min)
-score_h[h_mat_ij <= h_min] <- 0
-score_h[h_mat_ij >= h_opt] <- 1
-score_h[!is.finite(score_h)] <- 0
-
-# 7.2 Aktuelle Temperatur (T_last): optimum ~ -4 °C
+# 7.2 Aktuelle Temperatur (T_last)
 T_opt  <- -4
 T_min  <- -20
 T_max  <- 0
-
 range_T <- max(T_opt - T_min, T_max - T_opt)
-score_T <- 1 - abs(T_last_ij - T_opt) / range_T
-score_T[T_last_ij <= T_min | T_last_ij >= T_max] <- 0
-score_T[score_T < 0] <- 0
-score_T[!is.finite(score_T)] <- 0
+score_T <- score_T_fun(T_last_ij, T_opt, T_min, T_max, range_T)
 
-# 7.3 Tr3 (3-Tages-Mittel): optimal etwas kälter (~ -6 °C)
-T3_opt <- -6
-T3_min <- -20
-T3_max <- -1
-
+# 7.3 Tr3 (3-Tages-Mittel)
+T3_opt  <- -6
+T3_min  <- -20
+T3_max  <- -1
 range_T3 <- max(T3_opt - T3_min, T3_max - T3_opt)
-score_T3 <- 1 - abs(Tr3_ij - T3_opt) / range_T3
-score_T3[Tr3_ij <= T3_min | Tr3_ij >= T3_max] <- 0
-score_T3[score_T3 < 0] <- 0
-score_T3[!is.finite(score_T3)] <- 0
+score_T3 <- score_T_fun(Tr3_ij, T3_opt, T3_min, T3_max, range_T3)
 
-# 7.4 Luftfeuchte (mittlere Werte bevorzugt)
+# 7.4 Luftfeuchte
 RH_opt_c <- 0.7
 RH_sig_c <- 0.2
+score_RH <- score_RH_fun(RH_last_ij, RH_opt_c, RH_sig_c)
 
-score_RH_peak <- exp(- (RH_last_ij - RH_opt_c)^2 / (2 * RH_sig_c^2))
-score_RH      <- score_RH_peak
-score_RH[!is.finite(score_RH)] <- 0
-
-# Climbability-Historie (tägliche Snapshots entlang der Saison)
+# Climbability-Historie (tägliche Snapshots)
 climb_hist_layers <- list()
 climb_hist_labels <- character(0)
 
 if (length(FDH_hist_layers) > 0 && length(FDH_hist_labels) == length(FDH_hist_layers)) {
   climb_hist_layers <- vector("list", length(FDH_hist_layers))
   climb_hist_labels <- FDH_hist_labels
+  
   for (i in seq_along(FDH_hist_layers)) {
     r_fd <- FDH_hist_layers[[i]]
-    # Eisdicke-Snapshot
-    h_i <- r_fd * alpha
+    h_i  <- r_fd * alpha
     h_i[r_fd < FDH_crit] <- NA
     
-    # zugehöriger Zeitpunkt
-    t_i <- FDH_hist_times[i]
+    t_i    <- FDH_hist_times[i]
     dt_vec <- abs(as.numeric(difftime(time_vec, t_i, units = "hours")))
-    k_i <- which.min(dt_vec)
-    if (!is.finite(k_i) || length(k_i) == 0) next
+    k_i    <- which.min(dt_vec)
+    if (!length(k_i) || !is.finite(k_i)) next
     
-    # Temperatur / Feuchte als Raster
     T_i_mat  <- t(T2M_arr[ , , k_i])
     RH_i_mat <- t(RH_arr[ , , k_i] / 100)
+    
     r_T_i    <- raster(T_i_mat);  extent(r_T_i)  <- extent(r_template); crs(r_T_i)  <- crs(r_template)
     r_RH_i   <- raster(RH_i_mat); extent(r_RH_i) <- extent(r_template); crs(r_RH_i) <- crs(r_template)
     
-    # 3-Tages-Mittel bis zu diesem Zeitpunkt
-    k_start <- max(1, k_i - (72 - 1))
-    idx3    <- k_start:k_i
+    k_start   <- max(1, k_i - (72 - 1))
+    idx3      <- k_start:k_i
     Tr3_i_arr <- apply(T2M_arr[ , , idx3, drop = FALSE], c(1, 2), mean, na.rm = TRUE)
     Tr3_i_mat <- t(Tr3_i_arr)
     r_Tr3_i   <- raster(Tr3_i_mat); extent(r_Tr3_i) <- extent(r_template); crs(r_Tr3_i) <- crs(r_template)
     
-    # Scores für diesen Tag
-    score_h_i <- calc(h_i, fun = function(h) {
-      s <- (h - h_min) / (h_opt - h_min)
-      s[h <= h_min] <- 0
-      s[h >= h_opt] <- 1
-      s[!is.finite(s)] <- 0
-      s
-    })
-    
-    score_T_i <- calc(r_T_i, fun = function(Tv) {
-      s <- 1 - abs(Tv - T_opt) / range_T
-      s[Tv <= T_min | Tv >= T_max] <- 0
-      s[s < 0] <- 0
-      s[!is.finite(s)] <- 0
-      s
-    })
-    
-    score_T3_i <- calc(r_Tr3_i, fun = function(T3v) {
-      s <- 1 - abs(T3v - T3_opt) / range_T3
-      s[T3v <= T3_min | T3v >= T3_max] <- 0
-      s[s < 0] <- 0
-      s[!is.finite(s)] <- 0
-      s
-    })
-    
-    score_RH_i <- calc(r_RH_i, fun = function(rh) {
-      peak <- exp(- (rh - RH_opt_c)^2 / (2 * RH_sig_c^2))
-      s <- peak
-      s[!is.finite(s)] <- 0
-      s
-    })
+    score_h_i <- calc(h_i, fun = function(h) score_h_fun(h, h_min, h_opt))
+    score_T_i <- calc(r_T_i, fun = function(Tv) score_T_fun(Tv, T_opt, T_min, T_max, range_T))
+    score_T3_i <- calc(r_Tr3_i, fun = function(T3v) score_T_fun(T3v, T3_opt, T3_min, T3_max, range_T3))
+    score_RH_i <- calc(r_RH_i, fun = function(rh) score_RH_fun(rh, RH_opt_c, RH_sig_c))
     
     climb_i <- overlay(score_h_i, score_T_i, score_T3_i, score_RH_i,
                        fun = function(a, b, c, d) a * b * c * d)
@@ -652,29 +541,24 @@ if (length(FDH_hist_layers) > 0 && length(FDH_hist_labels) == length(FDH_hist_la
 # 7.5 Gesamt-Climbability-Index (0..1)
 
 climb_index_ij <- score_h * score_T * score_T3 * score_RH
-climb_index_ij[h_mat_ij <= h_min]        <- NA
+climb_index_ij[h_mat_ij <= h_min]          <- NA
 climb_index_ij[!is.finite(climb_index_ij)] <- NA
 climb_index_ij[climb_index_ij <= 0]        <- NA
 
-# Raster für aktuellen Climbability
-climb_mat_yx <- t(climb_index_ij)   # [ny, nx]
-
-climb_r <- raster(climb_mat_yx)
+climb_r <- raster(t(climb_index_ij))
 extent(climb_r) <- extent(r_template)
 crs(climb_r)    <- crs(r_template)
 names(climb_r)  <- "Climbability_0_1"
 
-
-# 8) Prognose-Eisdicke & -Climbability aus NWP (nwp-v1-1h-2500m) -----
+# 8) Prognose-Eisdicke & -Climbability aus NWP ------------------------
 
 base_url_nwp   <- "https://dataset.api.hub.geosphere.at/v1/grid/forecast/nwp-v1-1h-2500m"
 parameters_nwp <- c("t2m", "rh2m", "u10m", "v10m")
 param_str_nwp  <- paste(parameters_nwp, collapse = ",")
 
-# Letzte INCA-Zeit als "jetzt" (UTC)
 t_now    <- max(inca_nordtirol_all$time, na.rm = TRUE)
-t0 <- t_now   # Analysezeit = letzte INCA-Stunde, Referenz für Prognose-Zeiten
-fc_h_max <- 60  # Stunden Vorhersage (max. ~60 h)
+t0       <- t_now
+fc_h_max <- 60
 
 t_fc_end <- t_now + fc_h_max * 3600
 
@@ -712,13 +596,11 @@ if (!file.exists(outfile_fc) || file.info(outfile_fc)$size == 0) {
   message("  -> NWP-Vorhersage übersprungen (existiert): ", outfile_fc)
 }
 
-ice_fc_layers   <- NULL   # Liste von RasterLayern (Eisdicke-Prognose)
-climb_fc_layers <- NULL   # Liste von RasterLayern (Climbability-Prognose)
+ice_fc_layers   <- NULL
+climb_fc_layers <- NULL
 fc_step_hours   <- NULL
 
 if (file.exists(outfile_fc)) {
-  
-  # 8.1 Zeitvektor der Vorhersage aus NetCDF lesen
   nc_fc <- nc_open(outfile_fc)
   
   time_dim_name_fc <- names(nc_fc$dim)[grep("time", tolower(names(nc_fc$dim)))[1]]
@@ -728,33 +610,28 @@ if (file.exists(outfile_fc)) {
   
   nc_close(nc_fc)
   
-  # Führende Zeitdifferenz zur letzten INCA-Stunde (h)
   lead_hours <- as.numeric(difftime(time_fc, t_now, units = "hours"))
+  keep_fc    <- which(lead_hours >= 0 & lead_hours <= fc_h_max + 0.01)
   
-  keep_fc <- which(lead_hours >= 0 & lead_hours <= fc_h_max + 0.01)
   if (length(keep_fc) > 0) {
-    
     time_fc    <- time_fc[keep_fc]
     lead_hours <- lead_hours[keep_fc]
     
-    # 8.2 NWP-Variablen als RasterBrick lesen und auf INCA-Grid bringen
-    T2M_fc_brick  <- brick(outfile_fc, varname = "t2m")[[keep_fc]]   # °C
-    RH2M_fc_brick <- brick(outfile_fc, varname = "rh2m")[[keep_fc]]  # %
-    U10_fc_brick  <- brick(outfile_fc, varname = "u10m")[[keep_fc]]  # m/s (Ost)
-    V10_fc_brick  <- brick(outfile_fc, varname = "v10m")[[keep_fc]]  # m/s (Nord)
+    T2M_fc_brick  <- brick(outfile_fc, varname = "t2m")[[keep_fc]]
+    RH2M_fc_brick <- brick(outfile_fc, varname = "rh2m")[[keep_fc]]
+    U10_fc_brick  <- brick(outfile_fc, varname = "u10m")[[keep_fc]]
+    V10_fc_brick  <- brick(outfile_fc, varname = "v10m")[[keep_fc]]
     
     crs(T2M_fc_brick)  <- crs(r_template)
     crs(RH2M_fc_brick) <- crs(r_template)
     crs(U10_fc_brick)  <- crs(r_template)
     crs(V10_fc_brick)  <- crs(r_template)
     
-    # Auf INCA-Grid resamplen (1 km, EPSG:4326)
     T2M_fc  <- resample(T2M_fc_brick,  r_template, method = "bilinear")
     RH2M_fc <- resample(RH2M_fc_brick, r_template, method = "bilinear")
     U10_fc  <- resample(U10_fc_brick,  r_template, method = "bilinear")
     V10_fc  <- resample(V10_fc_brick,  r_template, method = "bilinear")
     
-    # 8.3 Hilfsgrößen: Wind, Sonnenhöhe, Zeitgewicht (Zukunft = 1)
     W_fc <- overlay(U10_fc, V10_fc,
                     fun = function(u, v) sqrt(u^2 + v^2))
     
@@ -765,136 +642,101 @@ if (file.exists(outfile_fc)) {
     
     delta_fc <- 23.44 * pi/180 * sin(2 * pi * (284 + doy_fc) / 365)
     H_fc     <- (hour_fc - 12) * 15 * pi/180
+    
     sin_alpha_fc <- sin(lat_center_rad) * sin(delta_fc) +
       cos(lat_center_rad) * cos(delta_fc) * cos(H_fc)
     sin_alpha_fc[sin_alpha_fc < 0] <- 0
     solar_height_factor_fc <- sin_alpha_fc
     
-    weight_time_fc <- rep(1, length(time_fc))   # Zukunft gleich gewichtet
+    weight_time_fc <- rep(1, length(time_fc))
     
-    # 8.4 "3-Tage-Regime" für Prognose: Mittelwert über gesamten Vorhersagehorizont
     Tr3_fc <- calc(T2M_fc, fun = function(x) mean(x, na.rm = TRUE))
     
     score_T3_fc <- calc(Tr3_fc, fun = function(t3) {
-      s <- 1 - abs(t3 - T3_opt) / range_T3
-      s[t3 <= T3_min | t3 >= T3_max] <- 0
-      s[s < 0] <- 0
-      s[!is.finite(s)] <- 0
-      s
+      score_T_fun(t3, T3_opt, T3_min, T3_max, range_T3)
     })
     
-    # 8.5 Ziel-Zeitpunkte für die Vorhersage:
-    #     - immer 07:00 Lokalzeit (Europe/Vienna)
-    #     - plus optional 0 h = Analysezeit
-    # ------------------------------------------------
-    
-    # Forecast-Zeiten in Lokalzeit
     time_fc_local <- as.POSIXct(
       format(time_fc, tz = "Europe/Vienna", usetz = TRUE),
       tz = "Europe/Vienna"
     )
     
-    # Analysezeit t0 auch nach Lokalzeit
-    t0_local <- as.POSIXct(
+    t0_local_fc <- as.POSIXct(
       format(t0, tz = "Europe/Vienna", usetz = TRUE),
       tz = "Europe/Vienna"
     )
     
-    # Datumsspanne für die Vorhersage
     date_seq <- seq.Date(
-      from = as.Date(t0_local),
+      from = as.Date(t0_local_fc),
       to   = as.Date(max(time_fc_local, na.rm = TRUE)),
       by   = "day"
     )
     
-    # Kandidaten: jeden Tag 07:00 Lokalzeit
     target_times_local <- as.POSIXct(
       paste0(date_seq, " 07:00:00"),
       tz = "Europe/Vienna"
     )
     
-    # Nur Zeiten >= Analysezeit und <= letztem Forecast-Zeitpunkt behalten
     target_times_local <- target_times_local[
-      target_times_local >= t0_local &
+      target_times_local >= t0_local_fc &
         target_times_local <= max(time_fc_local, na.rm = TRUE)
     ]
     
-    # Wenn nichts übrig bleibt, keine 07-Uhr-Snapshots
     if (length(target_times_local) == 0) {
       target_hours_07  <- numeric(0)
       target_labels_07 <- character(0)
     } else {
-      # zurück nach UTC (weil t0 / time_fc in UTC sind)
       target_times_utc <- as.POSIXct(
         format(target_times_local, tz = "UTC", usetz = TRUE),
         tz = "UTC"
       )
-      
-      # Stundenabstand relativ zur Analysezeit t0
-      target_hours_07 <- as.numeric(difftime(target_times_utc, t0, units = "hours"))
-      
-      # Labels schön mit Datum + 07:00 Lokalzeit
+      target_hours_07  <- as.numeric(difftime(target_times_utc, t0, units = "hours"))
       target_labels_07 <- format(target_times_local, "%d.%m.%Y, 07:00")
     }
     
-    # Jetzt komplette Liste der Zielstunden bauen:
-    #   - 0 h = Analysezeit (optional, aber meistens sinnvoll)
-    #   - danach alle 07:00-Snapshots
     target_hours_all  <- c(0, target_hours_07)
     target_labels_all <- c(
-      paste0(format(t0_local, "%d.%m.%Y, %H:%M"), " (Analyse)"),
+      paste0(format(t0_local_fc, "%d.%m.%Y, %H:%M"), " (Analyse)"),
       target_labels_07
     )
     
-    # Sicherheit: Duplikate entfernen / sortieren
     ord <- order(target_hours_all)
     target_hours_all  <- target_hours_all[ord]
     target_labels_all <- target_labels_all[ord]
     
-    # Noch zur Sicherheit auf den realen Horizont beschneiden
-    target_hours_all  <- target_hours_all[target_hours_all <= max(lead_hours) + 1e-6]
-    target_labels_all <- target_labels_all[seq_along(target_hours_all)]
+    max_lead <- max(lead_hours) + 1e-6
+    keep_idx <- target_hours_all <= max_lead
+    target_hours_all  <- target_hours_all[keep_idx]
+    target_labels_all <- target_labels_all[keep_idx]
     
-    # final
-    target_times  <- t0 + target_hours_all * 3600
-    target_labels <- target_labels_all
-    
+    target_times <- t0 + target_hours_all * 3600
     
     ice_fc_layers   <- vector("list", length(target_hours_all))
     climb_fc_layers <- vector("list", length(target_hours_all))
-    names(ice_fc_layers)   <- target_labels
-    names(climb_fc_layers) <- target_labels
+    names(ice_fc_layers)   <- target_labels_all
+    names(climb_fc_layers) <- target_labels_all
     
-    
-    # Index 0 h: einfach aktueller Zustand
     if (length(target_hours_all) > 0 && target_hours_all[1] == 0) {
       ice_fc_layers[[1]]   <- ice_thick_expo
       climb_fc_layers[[1]] <- climb_r
     }
     
-    # Ausgangs-FDH (bisher) als Raster
-    FDH_base_r <- r_FDH_eff
-    
-    delta_cum_r <- raster(FDH_base_r)
-    delta_cum_r[] <- 0
+    FDH_base_r  <- r_FDH_eff
+    delta_cum_r <- raster(FDH_base_r); delta_cum_r[] <- 0
     
     next_target_idx <- which(target_hours_all > 0)[1]
     if (is.na(next_target_idx)) next_target_idx <- length(target_hours_all) + 1
     
-    # 8.6 Schleife über alle Vorhersage-Stunden
     for (k in seq_along(time_fc)) {
-      
       dt_k <- lead_hours[k]
       
       T_k  <- raster(T2M_fc,  layer = k)
       RH_k <- raster(RH2M_fc, layer = k) / 100
       W_k  <- raster(W_fc,    layer = k)
       
-      # Basis-FDH / MDH (°C·h)
       FDH_k <- calc(T_k, fun = function(x) pmax(-x, 0))
       MDH_k <- calc(T_k, fun = function(x) pmax( x, 0))
       
-      # Wind-Faktor
       f_wind <- calc(W_k, fun = function(w) {
         wn <- (w - wind_ref) / wind_ref
         f  <- 1 + k_wind * wn
@@ -902,29 +744,28 @@ if (file.exists(outfile_fc)) {
         pmax(wind_min, pmin(wind_max, f))
       })
       
-      # Feuchte-Faktor (Peak bei rh_opt)
       f_rh <- calc(RH_k, fun = function(rh) {
-        peak <- exp(- (rh - rh_opt)^2 / (2 * rh_sig^2))
-        0.5 + 0.5 * peak
+        0.5 + 0.5 * exp(- (rh - rh_opt)^2 / (2 * rh_sig^2))
       })
       
-      # Strahlungs-/Expositions-Faktor (Südhang + hohe Sonne -> weniger Wachstum)
-      f_rad_k <- calc(solar_index_r, fun = function(s_index) {
-        f <- 1 - k_expo * solar_height_factor_fc[k] * s_index
-        f[!is.finite(f)] <- 1
-        pmax(0, pmin(1, f))
-      })
+      s_height_k <- solar_height_factor_fc[k]
+      f_rad_k <- if (s_height_k == 0) {
+        solar_index_r*0 + 1
+      } else {
+        calc(solar_index_r, fun = function(s_index) {
+          f <- 1 - k_expo * s_height_k * s_index
+          f[!is.finite(f)] <- 1
+          pmax(0, pmin(1, f))
+        })
+      }
       
-      # Zeitgewicht (Zukunft = 1)
       f_time_k <- weight_time_fc[k]
       
       FDH_eff_k <- FDH_k * f_wind * f_rh * f_rad_k * f_time_k
       MDH_eff_k <- MDH_k * k_melt * f_time_k
       
-      # kumulative Änderung
       delta_cum_r <- delta_cum_r + (FDH_eff_k - MDH_eff_k)
       
-      # Zielzeitpunkte setzen, sobald erreicht
       while (next_target_idx <= length(target_hours_all) &&
              dt_k >= target_hours_all[next_target_idx] - 0.5 &&
              is.null(ice_fc_layers[[next_target_idx]])) {
@@ -937,36 +778,15 @@ if (file.exists(outfile_fc)) {
         names(ice_k) <- paste0("h_pot_expo_m_fc_", target_hours_all[next_target_idx], "h")
         ice_fc_layers[[next_target_idx]] <- ice_k
         
-        # Climbability für diesen Zeitschritt
         h_k <- ice_k
         
-        score_h_k <- calc(h_k, fun = function(h) {
-          s <- (h - h_min) / (h_opt - h_min)
-          s[h <= h_min] <- 0
-          s[h >= h_opt] <- 1
-          s[!is.finite(s)] <- 0
-          s
-        })
-        
-        score_T_k <- calc(T_k, fun = function(Tv) {
-          s <- 1 - abs(Tv - T_opt) / range_T
-          s[Tv <= T_min | Tv >= T_max] <- 0
-          s[s < 0] <- 0
-          s[!is.finite(s)] <- 0
-          s
-        })
-        
-        score_RH_k <- calc(RH_k, fun = function(rh) {
-          peak <- exp(- (rh - RH_opt_c)^2 / (2 * RH_sig_c^2))
-          s <- peak
-          s[!is.finite(s)] <- 0
-          s
-        })
+        score_h_k <- calc(h_k, fun = function(h) score_h_fun(h, h_min, h_opt))
+        score_T_k <- calc(T_k, fun = function(Tv) score_T_fun(Tv, T_opt, T_min, T_max, range_T))
+        score_RH_k <- calc(RH_k, fun = function(rh) score_RH_fun(rh, RH_opt_c, RH_sig_c))
         
         climb_k <- overlay(score_h_k, score_T_k, score_T3_fc, score_RH_k,
                            fun = function(a, b, c, d) a * b * c * d)
         
-        # keine Climbability ohne Eis
         climb_k[is.na(h_k) | h_k <= h_min] <- NA
         climb_k[!is.finite(climb_k)]       <- NA
         climb_k[climb_k <= 0]              <- NA
@@ -977,7 +797,6 @@ if (file.exists(outfile_fc)) {
       }
     }
     
-    # am Ende: nicht gesetzte Targets ggf. mit letztem Zustand füllen
     if (any(vapply(ice_fc_layers, is.null, logical(1)))) {
       last_non_null <- max(which(!vapply(ice_fc_layers, is.null, logical(1))))
       for (i in seq_along(ice_fc_layers)) {
@@ -992,44 +811,34 @@ if (file.exists(outfile_fc)) {
   }
 }
 
-
 # 9) Interaktive Leaflet-Karte (Eisdicke & Climbability – Zeitverlauf) -----
-
-# 9.1 Zeitachsen-Stacks für Historie + Prognose ----------------------------
 
 ice_time_layers   <- list()
 climb_time_layers <- list()
 time_labels       <- character(0)
 
-# Historische Snapshots (täglich)
 if (length(ice_hist_layers) > 0L) {
   ice_time_layers   <- c(ice_time_layers, ice_hist_layers)
   climb_time_layers <- c(climb_time_layers, climb_hist_layers)
   time_labels       <- c(time_labels, ice_hist_labels)
 }
 
-# Prognose-Snapshots (0, +12, +24, ...) falls vorhanden
 if (!is.null(ice_fc_layers) && length(ice_fc_layers) > 0L) {
   ice_time_layers   <- c(ice_time_layers, ice_fc_layers)
   climb_time_layers <- c(climb_time_layers, climb_fc_layers)
-  # Namen der Forecast-Layer wurden bereits als Labels gesetzt
   time_labels       <- c(time_labels, names(ice_fc_layers))
 }
 
-# Fallback: falls irgendetwas schiefging, mindestens aktueller Zustand
 if (length(ice_time_layers) == 0L) {
   ice_time_layers   <- list(ice_thick_expo)
   climb_time_layers <- list(climb_r)
   time_labels       <- format(Sys.Date(), "%d.%m.%Y (Jetzt)")
 }
 
-# Längen konsistent halten
 n_steps <- min(length(ice_time_layers), length(climb_time_layers), length(time_labels))
 ice_time_layers   <- ice_time_layers[seq_len(n_steps)]
 climb_time_layers <- climb_time_layers[seq_len(n_steps)]
 time_labels       <- time_labels[seq_len(n_steps)]
-
-# 9.2 Farbpaletten über alle Zeitschritte ----------------------------------
 
 max_h_all <- vapply(
   ice_time_layers,
@@ -1044,7 +853,6 @@ if (!is.finite(max_h) || max_h <= 0) max_h <- 1
 
 col_fun <- colorRampPalette(c("#ffffff", "#c6dbef", "#6baed6", "#08519c"))
 
-
 pal_h <- colorNumeric(
   palette  = col_fun(100),
   domain   = c(0, max_h),
@@ -1057,26 +865,13 @@ pal_ci <- colorNumeric(
   na.color = "transparent"
 )
 
-d_today     <- Sys.Date()
 last_update <- format(Sys.time(), "%d.%m.%Y %H:%M UTC")
-
-# 9.3 Leaflet-Karte mit allen Zeitschritten bauen -------------------------
-
-ext <- extent(r_template)
+ext         <- extent(r_template)
 
 m <- leaflet() |>
-  # Standard-OSM
-  addProviderTiles(
-    providers$OpenStreetMap,
-    group = "OSM"
-  ) |>
-  # Gelände / Topo-Karte
-  addProviderTiles(
-    providers$OpenTopoMap,
-    group = "Gelände (Topo)"
-  )
+  addProviderTiles(providers$OpenStreetMap, group = "OSM") |>
+  addProviderTiles(providers$OpenTopoMap,   group = "Gelände (Topo)")
 
-# Alle Zeitschritte als Layer in zwei Gruppen: "Eisdicke" & "Climbability"
 if (length(ice_time_layers) > 0L) {
   visible_step_ice <- length(ice_time_layers)
   for (i in seq_along(ice_time_layers)) {
@@ -1147,12 +942,10 @@ m <- m |>
         "style='font-size: 14px; background: rgba(255,255,255,0.9);",
         "padding: 6px 8px; border-radius: 6px; max-width: 340px;",
         "line-height: 1.4;'>",
-        # --- Klickbarer Header ---
         "<div id='impressum-header' ",
         "style='font-weight:bold; cursor:pointer; margin-bottom:4px;'>",
         "Impressum / Quellen ▾",
         "</div>",
-        # --- Inhalt (startet versteckt) ---
         "<div id='impressum-body' style='display:none;'>",
         "<strong>Quellen</strong><br/>",
         "INCA (GeoSphere Austria, ",
@@ -1189,18 +982,6 @@ m <- htmlwidgets::onRender(
   "
 )
 
-# Debug: Leaflet-Methoden
-if (!is.null(m$x$calls)) {
-  leaf_methods <- vapply(m$x$calls, `[[`, character(1), "method")
-  msg <- paste(
-    paste(names(table(leaf_methods)), table(leaf_methods), sep = "="),
-    collapse = " | "
-  )
-  message("Leaflet-Methoden: ", msg)
-}
-
-# 9.4 Slider-Logik: Zeitverlauf (Historie + Prognose) ---------------------
-
 if (length(time_labels) > 0L) {
   labels_js  <- paste0("['", paste(time_labels, collapse = "','"), "']")
   n_steps_js <- n_steps
@@ -1212,13 +993,12 @@ if (length(time_labels) > 0L) {
       var lc = el.getElementsByClassName('leaflet-control-layers-expanded')[0]
                || el.getElementsByClassName('leaflet-control-layers')[0];
       if (lc) {
-        // Gesamt-Skalierung
-         lc.style.marginTop  = '10px';  // weiter nach unten
-          lc.style.marginRight = '90px'; // etwas nach links
-        lc.style.transform = 'scale(1.5)';      
-        lc.style.transformOrigin = 'top left';
-        lc.style.padding = '12px 15px';
-        lc.style.fontSize = '16px';
+         lc.style.marginTop  = '10px';
+         lc.style.marginRight = '90px';
+         lc.style.transform = 'scale(1.5)';
+         lc.style.transformOrigin = 'top left';
+         lc.style.padding = '12px 15px';
+         lc.style.fontSize = '16px';
       }
       window._eisMap = map;
       var labels = %s;
@@ -1241,7 +1021,6 @@ if (length(time_labels) > 0L) {
           if (typeof layer.setOpacity !== 'function') return;
           rasters.push(layer);
         });
-        console.log('splitLayersByOrder: rasters=', rasters.length, 'nSteps=', nSteps);
 
         var iceLayers   = [];
         var climbLayers = [];
@@ -1252,9 +1031,7 @@ if (length(time_labels) > 0L) {
           var half = Math.floor(rasters.length / 2);
           for (var i = 0; i < half; i++) iceLayers.push(rasters[i]);
           for (var j = half; j < rasters.length; j++) climbLayers.push(rasters[j]);
-          console.log('splitLayersByOrder Fallback: half=', half);
         }
-        console.log('splitLayersByOrder: ice=', iceLayers.length, 'climb=', climbLayers.length);
         return { ice: iceLayers, climb: climbLayers };
       }
 
@@ -1297,8 +1074,8 @@ if (length(time_labels) > 0L) {
         div.style.padding      = '8px 10px';
         div.style.borderRadius = '6px';
         div.style.minWidth     = '260px';
-        div.style.marginTop  = '70px';  // weiter runter
-        div.style.marginRight = '10px'; // etwas nach links
+        div.style.marginTop  = '70px';
+        div.style.marginRight = '10px';
 
         var title = document.createElement('div');
         title.style.fontSize   = '16px';
@@ -1326,7 +1103,6 @@ if (length(time_labels) > 0L) {
         slider.addEventListener('input', function(e) {
           var step = parseInt(e.target.value, 10);
           if (!isNaN(step)) {
-            console.log('Slider input: step=', step);
             setTimeStep(step);
           }
         });
@@ -1355,5 +1131,4 @@ if (length(time_labels) > 0L) {
   m <- htmlwidgets::onRender(m, js_code)
 }
 
-# HTML speichern und Widget zurückgeben
 saveWidget(m, "eisdicke_nordtirol.html", selfcontained = TRUE)
