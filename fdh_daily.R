@@ -28,7 +28,7 @@ library(ncdf4)
 
 # 0) Zeitraum & Gebiet -------------------------------------------------
 
-start_all    <- as.Date("2025-11-01") # Startdatum der Saison
+start_all    <- as.Date("2025-10-01") # Startdatum der Saison
 end_all      <- Sys.Date()           # bis heute
 chunk_days   <- 2                    # 2-Tages-Chunks (API-Limit)
 chunk_starts <- seq.Date(start_all, end_all, by = chunk_days)
@@ -258,8 +258,8 @@ northness_r           <- cos(aspect_rad_from_north)
 
 # 0 = Nord (schattig), 1 = Süd (besonnt)
 solar_index_r  <- (1 - northness_r) / 2
-solar_index_ij <- t(as.matrix(solar_index_r))  # [nx, ny]
 solar_index_r[is.na(solar_index_r[])] <- 0.5
+solar_index_ij <- t(as.matrix(solar_index_r))
 
 # 5) Zeitabhängige Sonnenhöhe + Zeit-Gewichtung ----------------------
 
@@ -345,17 +345,49 @@ k_melt   <- 1.2
 FDH_sum_eff <- matrix(0, nrow = nx, ncol = ny)
 
 for (k in seq_len(nt)) {
-  FDH_k <- FDH_hourly[ , , k]
-  MDH_k <- MDH_hourly[ , , k]
+  T_k  <- T2M_arr[ , , k]
+  RH_k <- RH_arr[ , , k] / 100
+  
+  # 1) Ganzer Zeitschritt ohne Daten -> überspringen (kein Beitrag)
+  if (all(is.na(T_k)) || all(is.na(RH_k))) {
+    # Historische Snapshots dürfen trotzdem gesetzt werden
+    t_k_hours <- time_offset_hours[k]
+    while (snap_idx_hist <= length(snap_hours_hist) &&
+           t_k_hours >= snap_hours_hist[snap_idx_hist] - 0.5) {
+      
+      FDH_k_snap <- FDH_sum_eff
+      FDH_k_snap[FDH_k_snap < 0] <- 0
+      
+      r_FDH_snap <- raster(t(FDH_k_snap))
+      extent(r_FDH_snap) <- extent(r_template)
+      crs(r_FDH_snap)    <- crs(r_template)
+      
+      label_time <- t_start + snap_hours_hist[snap_idx_hist] * 3600
+      label_str  <- format(label_time, "%d.%m.%Y")
+      
+      FDH_hist_layers[[length(FDH_hist_layers) + 1L]] <- r_FDH_snap
+      FDH_hist_labels <- c(FDH_hist_labels, label_str)
+      FDH_hist_times  <- c(FDH_hist_times, label_time)
+      
+      snap_idx_hist <- snap_idx_hist + 1L
+    }
+    next
+  }
+  
+  # 2) Teilweise fehlende RH -> auf neutralen Optimalwert setzen
+  RH_k_eff <- RH_k
+  RH_k_eff[is.na(RH_k_eff)] <- rh_opt  # z.B. 0.7
+  
+  FDH_k <- pmax(-T_k, 0)
+  MDH_k <- pmax( T_k, 0)
   W_k   <- W_arr[ , , k]
-  RH_k  <- RH_arr[ , , k] / 100
   
   wind_norm <- (W_k - wind_ref) / wind_ref
   f_wind    <- 1 + k_wind * wind_norm
   f_wind[!is.finite(f_wind)] <- 1
   f_wind <- pmax(wind_min, pmin(wind_max, f_wind))
   
-  f_rh_peak <- exp(- (RH_k - rh_opt)^2 / (2 * rh_sig^2))
+  f_rh_peak <- exp(- (RH_k_eff - rh_opt)^2 / (2 * rh_sig^2))
   f_rh      <- 0.5 + 0.5 * f_rh_peak
   
   s_height <- solar_height_factor_t[k]
@@ -375,7 +407,7 @@ for (k in seq_len(nt)) {
   
   FDH_sum_eff <- FDH_sum_eff + (FDH_eff_k - MDH_eff_k)
   
-  # Historische FDH-Schnappschüsse für Zeit-Slider (täglich)
+  # Historische FDH-Schnappschüsse (unverändert wie bei dir)
   t_k_hours <- time_offset_hours[k]
   while (snap_idx_hist <= length(snap_hours_hist) &&
          t_k_hours >= snap_hours_hist[snap_idx_hist] - 0.5) {
@@ -410,7 +442,7 @@ names(r_FDH_eff)  <- "FDH_eff_C_h"
 h_c      <- 30
 rho_i    <- 880
 Lf       <- 334000
-FDH_crit <- 30
+FDH_crit <- 1
 
 alpha <- h_c * 3600 / (rho_i * Lf)
 
