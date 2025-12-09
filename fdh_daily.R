@@ -25,6 +25,9 @@ library(raster)
 library(leaflet)
 library(htmlwidgets)
 library(ncdf4)
+library(readr)
+library(dplyr)
+library(tibble)
 
 # 0) Zeitraum & Gebiet -------------------------------------------------
 
@@ -246,7 +249,7 @@ crs(r_template) <- "EPSG:4326"
 
 # 4) DEM auf INCA-Grid + Expositionsindex (solar_index_ij) -----------
 
-dem_inca <- raster("DEM_Tirol_INCAgrid_1km_epsg4326.tif")
+dem_inca <- raster("data/DEM/DEM_Tirol_INCAgrid_1km_epsg4326.tif")
 crs(dem_inca) <- "EPSG:4326"
 names(dem_inca) <- "elev_m"
 
@@ -900,6 +903,58 @@ pal_ci <- colorNumeric(
 last_update <- format(Sys.time(), "%d.%m.%Y %H:%M UTC")
 ext         <- extent(r_template)
 
+# 9a) Eisfall-Sonnendaten + vorhandene Topo-URLs ----------------------
+
+sun_df <- readr::read_csv(
+  "data/Koordinaten_Wasserfaelle/icefalls_sun_horizon_2024_2025.csv",
+  show_col_types = FALSE
+)
+
+message("Sonnendaten geladen: ", nrow(sun_df), " Zeilen")
+
+ sun_date <- Sys.Date()        
+
+sun_today <- sun_df %>%
+  dplyr::filter(date == sun_date)
+
+# Fallback: falls kein Eintrag genau zu sun_date existiert -> letztes Datum
+if (nrow(sun_today) == 0) {
+  last_date <- max(sun_df$date, na.rm = TRUE)
+  message("Keine Sonnendaten für ", sun_date,
+          " gefunden. Verwende stattdessen ", last_date, ".")
+  sun_today <- sun_df %>%
+    dplyr::filter(date == last_date)
+}
+
+if (nrow(sun_today) == 0) {
+  stop("sun_today ist leer – prüfe icefalls_sun_horizon_2024_2025.csv (Spaltennamen / date-Typ).")
+}
+
+sun_today <- sun_today %>%
+  dplyr::mutate(
+    sunrise_txt   = format(sunrise_topo, "%H:%M"),
+    sunset_txt    = format(sunset_topo,  "%H:%M"),
+    sun_hours_txt = sprintf("%.1f", sun_hours_topo),
+    date_txt      = format(date, "%d.%m.%Y"),
+    popup = sprintf(
+      "<b>%s</b><br/>Sonne heute (%s): %s – %s (%s h)<br/>%s",
+      name,
+      date_txt,
+      sunrise_txt,
+      sunset_txt,
+      sun_hours_txt,
+      ifelse(
+        !is.na(topo_url) & topo_url != "",
+        paste0("<a href='", topo_url, "' target='_blank'>Topo öffnen</a>"),
+        "(kein Topo-Link hinterlegt)"
+      )
+    )
+  )
+
+
+message("Eisfälle für Karte: ", nrow(sun_today), " (Datum: ", unique(sun_today$date), ")")
+
+
 m <- leaflet() |>
   addProviderTiles(providers$OpenStreetMap, group = "OSM") |>
   addProviderTiles(providers$OpenTopoMap,   group = "Gelände (Topo)")
@@ -961,11 +1016,25 @@ m <- m |>
     labFormat = labelFormat(digits = 2),
     position  = "bottomleft"
   ) |>
-  addLayersControl(
-    baseGroups    = c("OSM", "Gelände (Topo)"),
-    overlayGroups = c("Eisdicke", "Climbability"),
-    options       = layersControlOptions(collapsed = FALSE)
-  ) |>
+  # === Eisfall-Markierungen ==========================================
+addCircleMarkers(
+  data        = sun_today,
+  lng         = ~longitude,
+  lat         = ~latitude,
+  radius      = 5,
+  color       = "black",
+  weight      = 1,
+  fillColor   = "orange",
+  fillOpacity = 0.9,
+  popup       = ~popup,
+  group       = "Eisfälle"
+) |>
+  # ===================================================================
+addLayersControl(
+  baseGroups    = c("OSM", "Gelände (Topo)"),
+  overlayGroups = c("Eisdicke", "Climbability", "Eisfälle"),
+  options       = layersControlOptions(collapsed = FALSE)
+) |>
   addControl(
     position = "bottomright",
     html = htmltools::HTML(
@@ -1020,142 +1089,145 @@ if (length(time_labels) > 0L) {
   
   js_code <- sprintf(
     "
-    function(el, x) {
-      var map    = this;
-      var lc = el.getElementsByClassName('leaflet-control-layers-expanded')[0]
-               || el.getElementsByClassName('leaflet-control-layers')[0];
-      if (lc) {
-         lc.style.marginTop  = '10px';
-         lc.style.marginRight = '90px';
-         lc.style.transform = 'scale(1.5)';
-         lc.style.transformOrigin = 'top left';
-         lc.style.padding = '12px 15px';
-         lc.style.fontSize = '16px';
-      }
-      window._eisMap = map;
-      var labels = %s;
-      var nSteps = %d;
-      if (!labels || labels.length === 0 || nSteps <= 0) {
-        console.log('Zeit-Slider: keine Labels / nSteps', labels, nSteps);
-        return;
-      }
-      if (labels.length !== nSteps) {
-        console.log('Zeit-Slider Warnung: labels.length != nSteps', labels.length, nSteps);
-      }
-      var initial = nSteps - 1;
-      if (initial < 0) initial = 0;
-
-      function splitLayersByOrder() {
-        var rasters = [];
-        map.eachLayer(function(layer) {
-          if (!layer || !layer.options) return;
-          if (layer instanceof L.TileLayer) return;
-          if (typeof layer.setOpacity !== 'function') return;
-          rasters.push(layer);
-        });
-
-        var iceLayers   = [];
-        var climbLayers = [];
-        if (rasters.length >= 2 * nSteps) {
-          for (var i = 0; i < nSteps; i++) iceLayers.push(rasters[i]);
-          for (var j = 0; j < nSteps; j++) climbLayers.push(rasters[nSteps + j]);
-        } else {
-          var half = Math.floor(rasters.length / 2);
-          for (var i = 0; i < half; i++) iceLayers.push(rasters[i]);
-          for (var j = half; j < rasters.length; j++) climbLayers.push(rasters[j]);
-        }
-        return { ice: iceLayers, climb: climbLayers };
-      }
-
-      var layerCache = splitLayersByOrder();
-
-      function setTimeStep(step) {
-        if (step < 0) step = 0;
-        if (step >= nSteps) step = nSteps - 1;
-
-        var iceLayers   = layerCache.ice || [];
-        var climbLayers = layerCache.climb || [];
-
-        iceLayers.forEach(function(layer, idx) {
-          if (layer && typeof layer.setOpacity === 'function') {
-            layer.setOpacity(idx === step ? 0.8 : 0.0);
-          }
-        });
-
-        climbLayers.forEach(function(layer, idx) {
-          if (layer && typeof layer.setOpacity === 'function') {
-            layer.setOpacity(idx === step ? 0.7 : 0.0);
-          }
-        });
-
-        var labelDiv = document.getElementById('time-label');
-        if (labelDiv && step >= 0 && step < labels.length) {
-          labelDiv.textContent = labels[step];
-        }
-
-        var slider = document.getElementById('time-slider');
-        if (slider && slider.value !== String(step)) {
-          slider.value = step;
-        }
-      }
-
-      var sliderControl = L.control({position: 'topright'});
-      sliderControl.onAdd = function() {
-        var div = L.DomUtil.create('div', 'info leaflet-control');
-        div.style.background   = 'rgba(255,255,255,0.9)';
-        div.style.padding      = '8px 10px';
-        div.style.borderRadius = '6px';
-        div.style.minWidth     = '260px';
-        div.style.marginTop  = '70px';
-        div.style.marginRight = '10px';
-
-        var title = document.createElement('div');
-        title.style.fontSize   = '16px';
-        title.style.marginBottom = '4px';
-        title.innerHTML = '<b>Eisdicke & Climbability – Zeitverlauf</b>';
-        div.appendChild(title);
-
-        var labelDiv = document.createElement('div');
-        labelDiv.id = 'time-label';
-        labelDiv.style.fontSize   = '14px';
-        labelDiv.style.marginBottom = '4px';
-        labelDiv.textContent = labels[initial] || labels[0];
-        div.appendChild(labelDiv);
-
-        var slider = document.createElement('input');
-        slider.type  = 'range';
-        slider.min   = 0;
-        slider.max   = nSteps - 1;
-        slider.step  = 1;
-        slider.value = initial;
-        slider.style.width = '240px';
-        slider.id    = 'time-slider';
-        div.appendChild(slider);
-
-        slider.addEventListener('input', function(e) {
-          var step = parseInt(e.target.value, 10);
-          if (!isNaN(step)) {
-            setTimeStep(step);
-          }
-        });
-
-        slider.addEventListener('mousedown', function(e) {
-          if (map && map.dragging) map.dragging.disable();
-        });
-        slider.addEventListener('mouseup', function(e) {
-          if (map && map.dragging) map.dragging.enable();
-        });
-
-        L.DomEvent.disableClickPropagation(div);
-        return div;
-      };
-      sliderControl.addTo(map);
-
-      setTimeout(function() {
-        setTimeStep(initial);
-      }, 500);
+  function(el, x) {
+    var map    = this;
+    var lc = el.getElementsByClassName('leaflet-control-layers-expanded')[0]
+             || el.getElementsByClassName('leaflet-control-layers')[0];
+    if (lc) {
+       lc.style.marginTop   = '10px';
+       lc.style.marginRight = '90px';
+       lc.style.transform   = 'scale(1.5)';
+       lc.style.transformOrigin = 'top left';
+       lc.style.padding     = '12px 15px';
+       lc.style.fontSize    = '16px';
     }
-    ",
+
+    window._eisMap = map;
+    var labels = %s;
+    var nSteps = %d;
+
+    if (!labels || labels.length === 0 || nSteps <= 0) {
+      console.log('Zeit-Slider: keine Labels / nSteps', labels, nSteps);
+      return;
+    }
+    if (labels.length !== nSteps) {
+      console.log('Zeit-Slider Warnung: labels.length != nSteps', labels.length, nSteps);
+    }
+
+    var initial = nSteps - 1;
+    if (initial < 0) initial = 0;
+
+    function splitLayersByOrder() {
+      var rasters = [];
+      map.eachLayer(function(layer) {
+        if (!layer || !layer.options) return;
+        if (layer instanceof L.TileLayer) return;
+        if (typeof layer.setOpacity !== 'function') return;
+        rasters.push(layer);
+      });
+
+      var iceLayers   = [];
+      var climbLayers = [];
+      if (rasters.length >= 2 * nSteps) {
+        for (var i = 0; i < nSteps; i++) iceLayers.push(rasters[i]);
+        for (var j = 0; j < nSteps; j++) climbLayers.push(rasters[nSteps + j]);
+      } else {
+        var half = Math.floor(rasters.length / 2);
+        for (var i = 0; i < half; i++) iceLayers.push(rasters[i]);
+        for (var j = half; j < rasters.length; j++) climbLayers.push(rasters[j]);
+      }
+      return { ice: iceLayers, climb: climbLayers };
+    }
+
+    var layerCache = splitLayersByOrder();
+
+    function setTimeStep(step) {
+      if (step < 0) step = 0;
+      if (step >= nSteps) step = nSteps - 1;
+
+      var iceLayers   = layerCache.ice || [];
+      var climbLayers = layerCache.climb || [];
+
+      iceLayers.forEach(function(layer, idx) {
+        if (layer && typeof layer.setOpacity === 'function') {
+          layer.setOpacity(idx === step ? 0.8 : 0.0);
+        }
+      });
+
+      climbLayers.forEach(function(layer, idx) {
+        if (layer && typeof layer.setOpacity === 'function') {
+          layer.setOpacity(idx === step ? 0.7 : 0.0);
+        }
+      });
+
+      var labelDiv = document.getElementById('time-label');
+      if (labelDiv && step >= 0 && step < labels.length) {
+        labelDiv.textContent = labels[step];
+      }
+
+      var slider = document.getElementById('time-slider');
+      if (slider && slider.value !== String(step)) {
+        slider.value = step;
+      }
+    }
+
+    var sliderControl = L.control({position: 'topright'});
+    sliderControl.onAdd = function() {
+      var div = L.DomUtil.create('div', 'info leaflet-control');
+      div.style.background   = 'rgba(255,255,255,0.9)';
+      div.style.padding      = '8px 10px';
+      div.style.borderRadius = '6px';
+      div.style.minWidth     = '260px';
+      div.style.marginTop    = '70px';
+      div.style.marginRight  = '10px';
+
+      var title = document.createElement('div');
+      title.style.fontSize    = '16px';
+      title.style.marginBottom = '4px';
+      title.innerHTML = '<b>Eisdicke & Climbability – Zeitverlauf</b>';
+      div.appendChild(title);
+
+      var labelDiv = document.createElement('div');
+      labelDiv.id = 'time-label';
+      labelDiv.style.fontSize   = '14px';
+      labelDiv.style.marginBottom = '4px';
+      labelDiv.textContent = labels[initial] || labels[0];
+      div.appendChild(labelDiv);
+
+      var slider = document.createElement('input');
+      slider.type  = 'range';
+      slider.min   = 0;
+      slider.max   = nSteps - 1;
+      slider.step  = 1;
+      slider.value = initial;
+      slider.style.width = '240px';
+      slider.id    = 'time-slider';
+      div.appendChild(slider);
+
+      slider.addEventListener('input', function(e) {
+        var step = parseInt(e.target.value, 10);
+        if (!isNaN(step)) {
+          setTimeStep(step);
+        }
+      });
+
+      slider.addEventListener('mousedown', function(e) {
+        if (map && map.dragging) map.dragging.disable();
+      });
+      slider.addEventListener('mouseup', function(e) {
+        if (map && map.dragging) map.dragging.enable();
+      });
+
+      L.DomEvent.disableClickPropagation(div);
+      return div;
+    };
+    sliderControl.addTo(map);
+
+    setTimeout(function() {
+      setTimeStep(initial);
+    }, 500);
+  }
+  ",
     labels_js,
     n_steps_js
   )
