@@ -504,33 +504,28 @@ idx_tr3 <- (nt - n_tr3 + 1):nt
 
 Tr3_ij <- apply(T2M_arr[ , , idx_tr3, drop = FALSE], c(1, 2), mean, na.rm = TRUE)
 
-# 7.1 Dicke-Score (weiterhin rein geometrisch)
+# 7.1 Dicke-Score
 h_min <- 0.10
 h_opt <- 0.50
 score_h <- score_h_fun(h_mat_ij, h_min, h_opt)
 
-# 7.2 Aktuelle Temperatur (T_climbing)
-# Bianchi (2004): optimale Klettertemperatur ca. -4 bis -3 °C, 
-# sehr hohe UND sehr tiefe T sind ungünstig.:contentReference[oaicite:1]{index=1}
-T_opt  <- -3.5      # Zentrum des Optimalbereichs -4 … -3 °C
-T_min  <- -18       # sehr kalt -> sprödes Eis, eher heikel
-T_max  <- 0         # >= 0 °C -> Schmelzen / sehr weiches Eis
+# 7.2 Aktuelle Temperatur (T_last)
+T_opt  <- -4
+T_min  <- -20
+T_max  <- 0
 range_T <- max(T_opt - T_min, T_max - T_opt)
 score_T <- score_T_fun(T_last_ij, T_opt, T_min, T_max, range_T)
 
 # 7.3 Tr3 (3-Tages-Mittel)
-# Bianchi: Tr3 zwischen -4 und -2 °C ist günstig, Tr3 > 0 °C klar negativ.:contentReference[oaicite:2]{index=2}
-T3_opt  <- -3       # Mittel der Spanne -4 … -2 °C
-T3_min  <- -10      # sehr kalte Serien -> eher sprödes Eis
-T3_max  <- 0        # ab > 0 °C deutlich schwächeres Eis
+T3_opt  <- -6
+T3_min  <- -20
+T3_max  <- -1
 range_T3 <- max(T3_opt - T3_min, T3_max - T3_opt)
 score_T3 <- score_T_fun(Tr3_ij, T3_opt, T3_min, T3_max, range_T3)
 
 # 7.4 Luftfeuchte
-# Bianchi: hohe Festigkeit bei mittlerer Luftfeuchte (ca. 40–50 %); 
-# zu trocken ODER zu feucht -> schwächeres Eis.:contentReference[oaicite:3]{index=3}
-RH_opt_c <- 0.45    # 45 % rel. Feuchte ~ Optimalbereich
-RH_sig_c <- 0.15    # etwas breiter Peak, ~0.30–0.60 noch ok
+RH_opt_c <- 0.7
+RH_sig_c <- 0.2
 score_RH <- score_RH_fun(RH_last_ij, RH_opt_c, RH_sig_c)
 
 # Climbability-Historie (tägliche Snapshots)
