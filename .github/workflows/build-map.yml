@@ -2,7 +2,7 @@ name: Build and deploy FDH Ice Map
 
 on:
 schedule:
-  - cron: '10 7 * * *'   # jeden Tag um 07:10 UTC
+  - cron: '20 0 * * *'   # jeden Tag um 07:10 UTC
   workflow_dispatch:
 
 permissions:
