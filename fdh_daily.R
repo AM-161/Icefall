@@ -28,6 +28,7 @@ library(ncdf4)
 library(readr)
 library(dplyr)
 library(tibble)
+library(lubridate)
 
 # 0) Zeitraum & Gebiet -------------------------------------------------
 
@@ -503,28 +504,33 @@ idx_tr3 <- (nt - n_tr3 + 1):nt
 
 Tr3_ij <- apply(T2M_arr[ , , idx_tr3, drop = FALSE], c(1, 2), mean, na.rm = TRUE)
 
-# 7.1 Dicke-Score
+# 7.1 Dicke-Score (weiterhin rein geometrisch)
 h_min <- 0.10
 h_opt <- 0.50
 score_h <- score_h_fun(h_mat_ij, h_min, h_opt)
 
-# 7.2 Aktuelle Temperatur (T_last)
-T_opt  <- -4
-T_min  <- -20
-T_max  <- 0
+# 7.2 Aktuelle Temperatur (T_climbing)
+# Bianchi (2004): optimale Klettertemperatur ca. -4 bis -3 °C, 
+# sehr hohe UND sehr tiefe T sind ungünstig.:contentReference[oaicite:1]{index=1}
+T_opt  <- -3.5      # Zentrum des Optimalbereichs -4 … -3 °C
+T_min  <- -18       # sehr kalt -> sprödes Eis, eher heikel
+T_max  <- 0         # >= 0 °C -> Schmelzen / sehr weiches Eis
 range_T <- max(T_opt - T_min, T_max - T_opt)
 score_T <- score_T_fun(T_last_ij, T_opt, T_min, T_max, range_T)
 
 # 7.3 Tr3 (3-Tages-Mittel)
-T3_opt  <- -6
-T3_min  <- -20
-T3_max  <- -1
+# Bianchi: Tr3 zwischen -4 und -2 °C ist günstig, Tr3 > 0 °C klar negativ.:contentReference[oaicite:2]{index=2}
+T3_opt  <- -3       # Mittel der Spanne -4 … -2 °C
+T3_min  <- -10      # sehr kalte Serien -> eher sprödes Eis
+T3_max  <- 0        # ab > 0 °C deutlich schwächeres Eis
 range_T3 <- max(T3_opt - T3_min, T3_max - T3_opt)
 score_T3 <- score_T_fun(Tr3_ij, T3_opt, T3_min, T3_max, range_T3)
 
 # 7.4 Luftfeuchte
-RH_opt_c <- 0.7
-RH_sig_c <- 0.2
+# Bianchi: hohe Festigkeit bei mittlerer Luftfeuchte (ca. 40–50 %); 
+# zu trocken ODER zu feucht -> schwächeres Eis.:contentReference[oaicite:3]{index=3}
+RH_opt_c <- 0.45    # 45 % rel. Feuchte ~ Optimalbereich
+RH_sig_c <- 0.15    # etwas breiter Peak, ~0.30–0.60 noch ok
 score_RH <- score_RH_fun(RH_last_ij, RH_opt_c, RH_sig_c)
 
 # Climbability-Historie (tägliche Snapshots)
@@ -701,39 +707,17 @@ if (file.exists(outfile_fc)) {
       tz = "Europe/Vienna"
     )
     
-    date_seq <- seq.Date(
-      from = as.Date(t0_local_fc),
-      to   = as.Date(max(time_fc_local, na.rm = TRUE)),
-      by   = "day"
-    )
-    
-    target_times_local <- as.POSIXct(
-      paste0(date_seq, " 07:00:00"),
-      tz = "Europe/Vienna"
-    )
-    
-    target_times_local <- target_times_local[
-      target_times_local >= t0_local_fc &
-        target_times_local <= max(time_fc_local, na.rm = TRUE)
-    ]
-    
-    if (length(target_times_local) == 0) {
-      target_hours_07  <- numeric(0)
-      target_labels_07 <- character(0)
-    } else {
-      target_times_utc <- as.POSIXct(
-        format(target_times_local, tz = "UTC", usetz = TRUE),
-        tz = "UTC"
-      )
-      target_hours_07  <- as.numeric(difftime(target_times_utc, t0, units = "hours"))
-      target_labels_07 <- format(target_times_local, "%d.%m.%Y, 07:00")
-    }
-    
-    target_hours_all  <- c(0, target_hours_07)
+    # -------------------------------
+    # Stundenweise Zeitstufen (Prognose)
+    # 0 h  = Analysezeit (t0)
+    # >0 h = jede NWP-Stunde
+    # -------------------------------
+    target_hours_all  <- c(0, lead_hours)
     target_labels_all <- c(
       paste0(format(t0_local_fc, "%d.%m.%Y, %H:%M"), " (Analyse)"),
-      target_labels_07
+      format(time_fc_local, "%d.%m.%Y, %H:%M")
     )
+    
     
     ord <- order(target_hours_all)
     target_hours_all  <- target_hours_all[ord]
@@ -745,6 +729,19 @@ if (file.exists(outfile_fc)) {
     target_labels_all <- target_labels_all[keep_idx]
     
     target_times <- t0 + target_hours_all * 3600
+    
+    # Zuordnung jeder Ziel-Zeitstufe zum nächstgelegenen NWP-Index (k)
+    step_to_k <- integer(length(target_hours_all))
+    if (length(target_hours_all) > 0) {
+      for (ii in seq_along(target_hours_all)) {
+        diffs <- abs(lead_hours - target_hours_all[ii])
+        if (all(!is.finite(diffs))) {
+          step_to_k[ii] <- NA_integer_
+        } else {
+          step_to_k[ii] <- which.min(diffs)
+        }
+      }
+    }
     
     ice_fc_layers   <- vector("list", length(target_hours_all))
     climb_fc_layers <- vector("list", length(target_hours_all))
@@ -846,6 +843,240 @@ if (file.exists(outfile_fc)) {
   }
 }
 
+# === Kompakte Tagesübersicht mit Piktogrammen + Kurz-Labels =========
+
+best_html <- NULL
+
+if (exists("climb_fc_layers") &&
+    !is.null(climb_fc_layers) &&
+    length(climb_fc_layers) > 0 &&
+    exists("target_times") &&
+    length(target_times) == length(climb_fc_layers)) {
+  
+  # 1) Alle Zeiten in lokale Zeit umrechnen
+  times_local_all <- lubridate::with_tz(target_times, "Europe/Vienna")
+  dates_all       <- as.Date(times_local_all)
+  
+  n_steps <- length(climb_fc_layers)
+  
+  # 2) Mittlere Kletterbarkeit pro Zeitschritt
+  mean_all <- rep(NA_real_, n_steps)
+  for (i in seq_len(n_steps)) {
+    r_i <- climb_fc_layers[[i]]
+    if (!is.null(r_i)) {
+      mean_all[i] <- suppressWarnings(
+        raster::cellStats(r_i, "mean", na.rm = TRUE)
+      )
+    }
+  }
+  
+  # Dataframe für saubere Klassen
+  df_fc <- data.frame(
+    step       = seq_len(n_steps),
+    time_local = times_local_all,
+    date       = dates_all,
+    mean_ci    = mean_all,
+    stringsAsFactors = FALSE
+  )
+  
+  # Nur gültige Zeilen
+  df_fc <- df_fc[is.finite(df_fc$mean_ci), ]
+  
+  if (nrow(df_fc) > 0) {
+    # Icon je nach Tageszeit
+    hour_icon <- function(h) {
+      if (h < 6 || h >= 22) {
+        "🌙"
+      } else if (h < 9) {
+        "🌅"
+      } else if (h < 18) {
+        "☀️"
+      } else {
+        "🌇"
+      }
+    }
+    
+    # Temperatur-Tags (inkl. „evtl. zu kalt“)
+    temp_tag <- function(T_mean, best = TRUE) {
+      if (!is.finite(T_mean)) return(NA_character_)
+      
+      if (T_mean <= -18) {
+        # sehr tiefe T -> sprödes Eis, eher heikel
+        if (best) "evtl. zu kalt / spröde" else "sehr kalt, spröde"
+      } else if (T_mean <= -10) {
+        if (best) "sehr kalt" else "sehr kalt"
+      } else if (T_mean <= -5) {
+        if (best) "kalt, meist gut" else "kalt"
+      } else if (T_mean <= -2) {
+        # Optimum T_climbing ≈ -4…-3 °C
+        if (best) "Optimalbereich (-4…-3 °C)" else "nahe Optimum"
+      } else if (T_mean <= 0) {
+        if (best) "mild, eher weich" else "mild"
+      } else {
+        "zu mild (>0 °C)"
+      }
+    }
+    
+    # Feuchte-Tags (40–50 % ideal)
+    rh_tag <- function(RH_mean) {
+      if (!is.finite(RH_mean)) return(NA_character_)
+      
+      if (RH_mean < 0.30) {
+        "zu trocken"
+      } else if (RH_mean < 0.40) {
+        "eher trocken"
+      } else if (RH_mean <= 0.50) {
+        "opt. Feuchte (40–50 %)"
+      } else if (RH_mean <= 0.70) {
+        "leicht feucht"
+      } else {
+        "sehr feucht"
+      }
+    }
+    
+    build_short_tag <- function(T_mean, RH_mean, best = TRUE) {
+      tt <- temp_tag(T_mean, best)
+      rr <- rh_tag(RH_mean)
+      tags <- na.omit(c(tt, rr))
+      if (length(tags) == 0) return("")
+      paste(tags, collapse = ", ")
+    }
+    
+    pict_rows <- character(0)
+    
+    # Nach Tagen gruppieren
+    split_by_date <- split(df_fc, df_fc$date)
+    
+    for (d_str in names(split_by_date)) {
+      block <- split_by_date[[d_str]]
+      d <- as.Date(d_str)  # explizit -> kein trim-Fehler
+      
+      # Beste / schlechteste Zeit an diesem Tag
+      idx_best <- which.max(block$mean_ci)
+      idx_min  <- which.min(block$mean_ci)
+      
+      row_best <- block[idx_best, ]
+      row_min  <- block[idx_min, ]
+      
+      t_best <- row_best$time_local
+      t_min  <- row_min$time_local
+      
+      h_best <- lubridate::hour(t_best) + lubridate::minute(t_best) / 60
+      h_min  <- lubridate::hour(t_min)  + lubridate::minute(t_min)  / 60
+      
+      icon_best <- hour_icon(h_best)
+      icon_min  <- hour_icon(h_min)
+      
+      # Kurz-Labels aus Prognose-T und RH holen (falls möglich)
+      tag_best <- ""
+      tag_min  <- ""
+      
+      if (exists("T2M_fc") && exists("RH2M_fc") && exists("step_to_k")) {
+        # BESTE Zeit
+        k_best <- NA_integer_
+        if (!is.null(step_to_k) &&
+            row_best$step <= length(step_to_k)) {
+          k_best <- step_to_k[row_best$step]
+        }
+        if (is.finite(k_best) &&
+            k_best >= 1 &&
+            k_best <= raster::nlayers(T2M_fc)) {
+          T_r_best  <- raster::raster(T2M_fc,  layer = k_best)
+          RH_r_best <- raster::raster(RH2M_fc, layer = k_best) / 100
+          
+          T_mean_best  <- suppressWarnings(raster::cellStats(T_r_best,  "mean", na.rm = TRUE))
+          RH_mean_best <- suppressWarnings(raster::cellStats(RH_r_best, "mean", na.rm = TRUE))
+          
+          tag_best <- build_short_tag(T_mean_best, RH_mean_best, best = TRUE)
+        }
+        
+        # SCHLECHTESTE Zeit
+        k_min <- NA_integer_
+        if (!is.null(step_to_k) &&
+            row_min$step <= length(step_to_k)) {
+          k_min <- step_to_k[row_min$step]
+        }
+        if (is.finite(k_min) &&
+            k_min >= 1 &&
+            k_min <= raster::nlayers(T2M_fc)) {
+          T_r_min  <- raster::raster(T2M_fc,  layer = k_min)
+          RH_r_min <- raster::raster(RH2M_fc, layer = k_min) / 100
+          
+          T_mean_min  <- suppressWarnings(raster::cellStats(T_r_min,  "mean", na.rm = TRUE))
+          RH_mean_min <- suppressWarnings(raster::cellStats(RH_r_min, "mean", na.rm = TRUE))
+          
+          tag_min <- build_short_tag(T_mean_min, RH_mean_min, best = FALSE)
+        }
+      }
+      
+      # Tabellenzeile:
+      #  - erste Zeile: Uhrzeit + Icon
+      #  - zweite Zeile klein: Kurz-Labels (inkl. "evtl. zu kalt" / "zu mild" etc.)
+      pict_rows <- c(
+        pict_rows,
+        sprintf(
+          "<tr>
+             <td>%s</td>
+             <td>
+               ▲ %s&nbsp;%s<br/>
+               <span style='font-size:10px;'>%s</span>
+             </td>
+             <td>
+               ▼ %s&nbsp;%s<br/>
+               <span style='font-size:10px;'>%s</span>
+             </td>
+           </tr>",
+          format(d, "%d.%m."),
+          format(t_best, "%H:%M"), icon_best, tag_best,
+          format(t_min,  "%H:%M"), icon_min,  tag_min
+        )
+      )
+    }
+    
+    if (length(pict_rows) > 0) {
+      table_html <- paste0(
+        "<table style='width:100%; border-collapse:collapse; font-size:12px;'>",
+        "<tr>",
+        "<th style='text-align:left;'>Tag</th>",
+        "<th style='text-align:left;'>Beste Zeit</th>",
+        "<th style='text-align:left;'>Schlechteste Zeit</th>",
+        "</tr>",
+        paste(pict_rows, collapse = ""),
+        "</table>"
+      )
+      
+      best_html <- htmltools::HTML(
+        paste0(
+          "<div id='climb-summary-box' ",
+          "style='font-size: 13px; background: rgba(255,255,255,0.9);",
+          "padding: 6px 8px; border-radius: 6px; max-width: 420px;",
+          "line-height: 1.4;'>",
+          
+          # Header: anklickbar, Body zuerst versteckt
+          "<div id='climb-summary-header' ",
+          "style='font-weight:bold; cursor:pointer; margin-bottom:4px;'>",
+          "Kletterbarkeit – Tagesübersicht (Prognose) ▾",
+          "</div>",
+          
+          "<div id='climb-summary-body' style='display:none;'>",
+          table_html,
+          "<div style='font-size:11px; margin-top:4px;'>",
+          "▲ höchster, ▼ niedrigster mittlerer Climbability-Wert (Gebietsmittel).",
+          "<br/>",
+          "<span style='font-size:10px;'>",
+          "\"evtl. zu kalt\" bedeutet: sehr tiefe Lufttemperaturen (z.B. &lt; −18 °C), ",
+          "Eis kann spröde sein.",
+          "</span>",
+          "</div>",
+          "</div>",  # Ende body
+          "</div>"   # Ende Box
+        )
+      )
+    }
+  }
+}
+
+
 # 9) Interaktive Leaflet-Karte (Eisdicke & Climbability – Zeitverlauf) -----
 
 ice_time_layers   <- list()
@@ -910,7 +1141,24 @@ sun_df <- readr::read_csv(
   show_col_types = FALSE
 )
 
-message("Sonnendaten geladen: ", nrow(sun_df), " Zeilen")
+# Sicherstellen, dass sunrise_topo / sunset_topo als Datum-Zeit vorliegen
+# (falls readr sie als Character eingelesen hat)
+if (!inherits(sun_df$sunrise_topo, "POSIXt")) {
+  sun_df <- sun_df %>%
+    mutate(
+      sunrise_topo = ymd_hms(sunrise_topo, tz = "UTC"),
+      sunset_topo  = ymd_hms(sunset_topo,  tz = "UTC")
+    )
+}
+
+sun_df <- sun_df %>%
+  mutate(
+    # CSV-Zeiten sind als UTC gespeichert -> zurück in lokale Zeit
+    sunrise_topo = with_tz(sunrise_topo, "Europe/Vienna"),
+    sunset_topo  = with_tz(sunset_topo,  "Europe/Vienna"),
+    # Sonnendauer zur Sicherheit neu aus den korrigierten Zeiten berechnen
+    sun_hours_topo = as.numeric(difftime(sunset_topo, sunrise_topo, units = "hours"))
+  )
 
  sun_date <- Sys.Date()        
 
@@ -932,32 +1180,49 @@ if (nrow(sun_today) == 0) {
 
 sun_today <- sun_today %>%
   dplyr::mutate(
-    sunrise_txt   = format(sunrise_topo, "%H:%M"),
-    sunset_txt    = format(sunset_topo,  "%H:%M"),
+    # times so verwenden, wie sie in der CSV stehen
+    sunrise_txt   = substr(as.character(sunrise_topo), 12, 16),  # "YYYY-MM-DD HH:MM:SS" -> HH:MM
+    sunset_txt    = substr(as.character(sunset_topo),  12, 16),
     sun_hours_txt = sprintf("%.1f", sun_hours_topo),
     date_txt      = format(date, "%d.%m.%Y"),
-    popup = sprintf(
-      "<b>%s</b><br/>Sonne heute (%s): %s – %s (%s h)<br/>%s",
-      name,
-      date_txt,
-      sunrise_txt,
-      sunset_txt,
-      sun_hours_txt,
-      ifelse(
-        !is.na(topo_url) & topo_url != "",
-        paste0("<a href='", topo_url, "' target='_blank'>Topo öffnen</a>"),
-        "(kein Topo-Link hinterlegt)"
+    # Link-Text separat bauen
+    link_txt = ifelse(
+      !is.na(topo_url) & topo_url != "",
+      paste0("<a href='", topo_url, "' target='_blank'>Topo öffnen</a>"),
+      "(kein Topo-Link hinterlegt)"
+    ),
+    # Popup-Text: bei NAs -> "keine direkte Sonneneinstrahlung"
+    popup = ifelse(
+      is.na(sun_hours_topo) | is.na(sunrise_topo) | is.na(sunset_topo),
+      sprintf(
+        "<b>%s</b><br/>Sonne am %s: keine direkte Sonneneinstrahlung<br/>%s",
+        name,
+        date_txt,
+        link_txt
+      ),
+      sprintf(
+        "<b>%s</b><br/>Sonne am %s: %s – %s (%s h)<br/>%s",
+        name,
+        date_txt,
+        sunrise_txt,
+        sunset_txt,
+        sun_hours_txt,
+        link_txt
       )
     )
   )
 
-
-message("Eisfälle für Karte: ", nrow(sun_today), " (Datum: ", unique(sun_today$date), ")")
-
-
 m <- leaflet() |>
   addProviderTiles(providers$OpenStreetMap, group = "OSM") |>
   addProviderTiles(providers$OpenTopoMap,   group = "Gelände (Topo)")
+
+if (!is.null(best_html)) {
+  m <- m |>
+    addControl(
+      position = "bottomright", 
+      html     = best_html
+    )
+}
 
 if (length(ice_time_layers) > 0L) {
   visible_step_ice <- length(ice_time_layers)
@@ -1055,8 +1320,6 @@ addLayersControl(
         "<a href='https://doi.org/10.60669/9zm8-s664' target='_blank'>doi:10.60669/9zm8-s664</a>)<br/>",
         "DEM Tirol (",
         "<a href='https://www.data.gv.at/katalog/datasets/0454f5f3-1d8c-464e-847d-541901eb021a' target='_blank'>data.gv.at</a>)<br/><br/>",
-        "<strong>Autor:</strong> ",
-        "<a href='https://www.instagram.com/antifascist_mountaineer/' target='_blank'>@antifascist_mountaineer</a><br/>",
         "<em>Letztes Update: ", last_update, "</em>",
         "</div>",
         "</div>"
@@ -1234,5 +1497,27 @@ if (length(time_labels) > 0L) {
   
   m <- htmlwidgets::onRender(m, js_code)
 }
+
+m <- htmlwidgets::onRender(
+  m,
+  "
+  function(el, x) {
+    var header = el.querySelector('#climb-summary-header');
+    var body   = el.querySelector('#climb-summary-body');
+    if (!header || !body) return;
+
+    // sicherheitshalber beim Laden zugeklappt
+    body.style.display = 'none';
+
+    header.addEventListener('click', function() {
+      var visible = body.style.display !== 'none';
+      body.style.display = visible ? 'none' : 'block';
+      header.innerHTML = visible
+        ? 'Kletterbarkeit – Tagesübersicht (Prognose) ▾'
+        : 'Kletterbarkeit – Tagesübersicht (Prognose) ▴';
+    });
+  }
+  "
+)
 
 saveWidget(m, "eisdicke_nordtirol.html", selfcontained = TRUE)
