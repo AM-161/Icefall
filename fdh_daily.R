@@ -265,6 +265,25 @@ solar_index_r  <- (1 - northness_r) / 2
 solar_index_r[is.na(solar_index_r[])] <- 0.5
 solar_index_ij <- t(as.matrix(solar_index_r))
 
+# --- Höhen-Gewichte: Zellen > 2500 m werden weniger gewichtet --------
+alt_threshold    <- 2500   # m
+alt_weight_high  <- 0.5    # Gewicht für Zellen über 2500 m (z.B. 0.5 = halb so wichtig)
+
+alt_weight_r <- raster::calc(dem_inca, fun = function(z) {
+  ifelse(is.na(z), NA,
+         ifelse(z > alt_threshold, alt_weight_high, 1))
+})
+names(alt_weight_r) <- "w_alt"
+
+# Hilfsfunktion: gewichtetes Mittel mit Höhen-Gewicht
+weighted_mean_alt <- function(r, w_rast = alt_weight_r) {
+  v <- raster::getValues(r)
+  w <- raster::getValues(w_rast)
+  ok <- is.finite(v) & is.finite(w)
+  if (!any(ok)) return(NA_real_)
+  sum(v[ok] * w[ok]) / sum(w[ok])
+}
+
 # 5) Zeitabhängige Sonnenhöhe + Zeit-Gewichtung ----------------------
 
 time_vec <- inca_nordtirol_all$time
@@ -846,38 +865,50 @@ if (exists("climb_fc_layers") &&
     !is.null(climb_fc_layers) &&
     length(climb_fc_layers) > 0 &&
     exists("target_times") &&
-    length(target_times) == length(climb_fc_layers)) {
+    length(target_times) == length(climb_fc_layers) &&
+    exists("time_fc") &&
+    exists("T2M_fc") &&
+    exists("RH2M_fc")) {
   
   # 1) Alle Zeiten in lokale Zeit umrechnen
   times_local_all <- lubridate::with_tz(target_times, "Europe/Vienna")
   dates_all       <- as.Date(times_local_all)
   
-  n_steps <- length(climb_fc_layers)
-  
-  # 2) Mittlere Kletterbarkeit pro Zeitschritt
-  mean_all <- rep(NA_real_, n_steps)
-  for (i in seq_len(n_steps)) {
-    r_i <- climb_fc_layers[[i]]
-    if (!is.null(r_i)) {
-      mean_all[i] <- suppressWarnings(
-        raster::cellStats(r_i, "mean", na.rm = TRUE)
-      )
+  # 2) Zuordnung: welcher Forecast-Zeitpunkt (time_fc) gehört zu welchem Step?
+  fc_idx_for_step <- integer(length(target_times))
+  for (s in seq_along(target_times)) {
+    dt <- abs(as.numeric(difftime(time_fc, target_times[s], units = "hours")))
+    if (all(is.na(dt))) {
+      fc_idx_for_step[s] <- NA_integer_
+    } else {
+      fc_idx_for_step[s] <- which.min(dt)
     }
   }
   
-  # Dataframe für saubere Klassen
+  # 3) Mittlere Kletterbarkeit pro Zeitschritt (höhengewichtet)
+  mean_all <- rep(NA_real_, length(climb_fc_layers))
+  for (i in seq_along(climb_fc_layers)) {
+    r_i <- climb_fc_layers[[i]]
+    if (!is.null(r_i)) {
+      mean_all[i] <- weighted_mean_alt(r_i)
+    }
+  }
+  
+  # Dataframe für saubere Verarbeitung
   df_fc <- data.frame(
-    step       = seq_len(n_steps),
+    step       = seq_along(climb_fc_layers),
     time_local = times_local_all,
     date       = dates_all,
     mean_ci    = mean_all,
+    fc_idx     = fc_idx_for_step,
     stringsAsFactors = FALSE
   )
   
-  # Nur gültige Zeilen
-  df_fc <- df_fc[is.finite(df_fc$mean_ci), ]
+  # Nur gültige Zeilen verwenden
+  df_fc <- df_fc[is.finite(df_fc$mean_ci), , drop = FALSE]
   
   if (nrow(df_fc) > 0) {
+    
     # Icon je nach Tageszeit
     hour_icon <- function(h) {
       if (h < 6 || h >= 22) {
@@ -891,19 +922,17 @@ if (exists("climb_fc_layers") &&
       }
     }
     
-    # Temperatur-Tags (inkl. „evtl. zu kalt“)
+    # Temperatur-Tags
     temp_tag <- function(T_mean, best = TRUE) {
       if (!is.finite(T_mean)) return(NA_character_)
       
       if (T_mean <= -18) {
-        # sehr tiefe T -> sprödes Eis, eher heikel
         if (best) "evtl. zu kalt / spröde" else "sehr kalt, spröde"
       } else if (T_mean <= -10) {
         if (best) "sehr kalt" else "sehr kalt"
       } else if (T_mean <= -5) {
         if (best) "kalt, meist gut" else "kalt"
       } else if (T_mean <= -2) {
-        # Optimum T_climbing ≈ -4…-3 °C
         if (best) "Optimalbereich (-4…-3 °C)" else "nahe Optimum"
       } else if (T_mean <= 0) {
         if (best) "mild, eher weich" else "mild"
@@ -912,7 +941,7 @@ if (exists("climb_fc_layers") &&
       }
     }
     
-    # Feuchte-Tags (40–50 % ideal)
+    # Feuchte-Tags
     rh_tag <- function(RH_mean) {
       if (!is.finite(RH_mean)) return(NA_character_)
       
@@ -944,14 +973,45 @@ if (exists("climb_fc_layers") &&
     
     for (d_str in names(split_by_date)) {
       block <- split_by_date[[d_str]]
-      d <- as.Date(d_str)  # explizit -> kein trim-Fehler
+      d <- as.Date(d_str)
       
-      # Beste / schlechteste Zeit an diesem Tag
-      idx_best <- which.max(block$mean_ci)
-      idx_min  <- which.min(block$mean_ci)
+      n_block <- nrow(block)
       
-      row_best <- block[idx_best, ]
-      row_min  <- block[idx_min, ]
+      # T- und RH-Mittel (höhengewichtet) für alle Steps dieses Tages
+      T_means_day  <- rep(NA_real_, n_block)
+      RH_means_day <- rep(NA_real_, n_block)
+      
+      for (j in seq_len(n_block)) {
+        k <- block$fc_idx[j]
+        if (is.finite(k) &&
+            k >= 1 &&
+            k <= raster::nlayers(T2M_fc)) {
+          T_r_j  <- raster::raster(T2M_fc,  layer = k)
+          RH_r_j <- raster::raster(RH2M_fc, layer = k) / 100
+          T_means_day[j]  <- weighted_mean_alt(T_r_j)
+          RH_means_day[j] <- weighted_mean_alt(RH_r_j)
+        }
+      }
+      
+      # Kandidaten für „beste Zeit“: nur -18 °C <= T <= 0 °C
+      mask_good <- is.finite(T_means_day) &
+        (T_means_day >= -18) &
+        (T_means_day <= 0)
+      
+      if (any(mask_good)) {
+        ci_cand <- block$mean_ci
+        ci_cand[!mask_good] <- NA
+        idx_best_local <- which.max(ci_cand)
+      } else {
+        # Fallback: wenn keine „guten“ Temps, nimm globales Maximum
+        idx_best_local <- which.max(block$mean_ci)
+      }
+      
+      # Schlechteste Zeit = kleinster Climbability-Wert
+      idx_min_local <- which.min(block$mean_ci)
+      
+      row_best <- block[idx_best_local, ]
+      row_min  <- block[idx_min_local, ]
       
       t_best <- row_best$time_local
       t_min  <- row_min$time_local
@@ -962,51 +1022,15 @@ if (exists("climb_fc_layers") &&
       icon_best <- hour_icon(h_best)
       icon_min  <- hour_icon(h_min)
       
-      # Kurz-Labels aus Prognose-T und RH holen (falls möglich)
-      tag_best <- ""
-      tag_min  <- ""
+      # T/RH für Tags aus den Arrays ziehen (Indices passen zu block-Reihen)
+      T_mean_best  <- T_means_day[idx_best_local]
+      RH_mean_best <- RH_means_day[idx_best_local]
+      T_mean_min   <- T_means_day[idx_min_local]
+      RH_mean_min  <- RH_means_day[idx_min_local]
       
-      if (exists("T2M_fc") && exists("RH2M_fc") && exists("step_to_k")) {
-        # BESTE Zeit
-        k_best <- NA_integer_
-        if (!is.null(step_to_k) &&
-            row_best$step <= length(step_to_k)) {
-          k_best <- step_to_k[row_best$step]
-        }
-        if (is.finite(k_best) &&
-            k_best >= 1 &&
-            k_best <= raster::nlayers(T2M_fc)) {
-          T_r_best  <- raster::raster(T2M_fc,  layer = k_best)
-          RH_r_best <- raster::raster(RH2M_fc, layer = k_best) / 100
-          
-          T_mean_best  <- suppressWarnings(raster::cellStats(T_r_best,  "mean", na.rm = TRUE))
-          RH_mean_best <- suppressWarnings(raster::cellStats(RH_r_best, "mean", na.rm = TRUE))
-          
-          tag_best <- build_short_tag(T_mean_best, RH_mean_best, best = TRUE)
-        }
-        
-        # SCHLECHTESTE Zeit
-        k_min <- NA_integer_
-        if (!is.null(step_to_k) &&
-            row_min$step <= length(step_to_k)) {
-          k_min <- step_to_k[row_min$step]
-        }
-        if (is.finite(k_min) &&
-            k_min >= 1 &&
-            k_min <= raster::nlayers(T2M_fc)) {
-          T_r_min  <- raster::raster(T2M_fc,  layer = k_min)
-          RH_r_min <- raster::raster(RH2M_fc, layer = k_min) / 100
-          
-          T_mean_min  <- suppressWarnings(raster::cellStats(T_r_min,  "mean", na.rm = TRUE))
-          RH_mean_min <- suppressWarnings(raster::cellStats(RH_r_min, "mean", na.rm = TRUE))
-          
-          tag_min <- build_short_tag(T_mean_min, RH_mean_min, best = FALSE)
-        }
-      }
+      tag_best <- build_short_tag(T_mean_best, RH_mean_best, best = TRUE)
+      tag_min  <- build_short_tag(T_mean_min,  RH_mean_min,  best = FALSE)
       
-      # Tabellenzeile:
-      #  - erste Zeile: Uhrzeit + Icon
-      #  - zweite Zeile klein: Kurz-Labels (inkl. "evtl. zu kalt" / "zu mild" etc.)
       pict_rows <- c(
         pict_rows,
         sprintf(
@@ -1047,7 +1071,6 @@ if (exists("climb_fc_layers") &&
           "padding: 6px 8px; border-radius: 6px; max-width: 420px;",
           "line-height: 1.4;'>",
           
-          # Header: anklickbar, Body zuerst versteckt
           "<div id='climb-summary-header' ",
           "style='font-weight:bold; cursor:pointer; margin-bottom:4px;'>",
           "Kletterbarkeit – Tagesübersicht (Prognose) ▾",
@@ -1056,21 +1079,18 @@ if (exists("climb_fc_layers") &&
           "<div id='climb-summary-body' style='display:none;'>",
           table_html,
           "<div style='font-size:11px; margin-top:4px;'>",
-          "▲ höchster, ▼ niedrigster mittlerer Climbability-Wert (Gebietsmittel).",
-          "<br/>",
+          "▲ höchster, ▼ niedrigster mittlerer Climbability-Wert (Gebietsmittel, höhengewichtet).<br/>",
           "<span style='font-size:10px;'>",
-          "\"evtl. zu kalt\" bedeutet: sehr tiefe Lufttemperaturen (z.B. &lt; −18 °C), ",
-          "Eis kann spröde sein.",
+          "\"evtl. zu kalt\" bedeutet: sehr tiefe Lufttemperaturen (z.B. &lt; −18 °C), Eis kann spröde sein.",
           "</span>",
           "</div>",
-          "</div>",  # Ende body
-          "</div>"   # Ende Box
+          "</div>",
+          "</div>"
         )
       )
     }
   }
 }
-
 
 # 9) Interaktive Leaflet-Karte (Eisdicke & Climbability – Zeitverlauf) -----
 
@@ -1155,7 +1175,7 @@ sun_df <- sun_df %>%
     sun_hours_topo = as.numeric(difftime(sunset_topo, sunrise_topo, units = "hours"))
   )
 
- sun_date <- Sys.Date()        
+sun_date <- Sys.Date()        
 
 sun_today <- sun_df %>%
   dplyr::filter(date == sun_date)
