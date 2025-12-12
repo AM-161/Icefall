@@ -1175,7 +1175,7 @@ sun_df <- sun_df %>%
     sun_hours_topo = as.numeric(difftime(sunset_topo, sunrise_topo, units = "hours"))
   )
 
-sun_date <- Sys.Date()        
+ sun_date <- Sys.Date()        
 
 sun_today <- sun_df %>%
   dplyr::filter(date == sun_date)
@@ -1562,4 +1562,5 @@ m <- htmlwidgets::onRender(
   "
 )
 
-saveWidget(m, "eisdicke_nordtirol.html", selfcontained = TRUE)
+dir.create("site", showWarnings = FALSE)
+saveWidget(m, "site/index.html", selfcontained = FALSE)
