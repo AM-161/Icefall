@@ -1218,17 +1218,28 @@ if (isTRUE(preview_mode)) {
          var ice   = L.imageOverlay(iceUrl,   bounds, {opacity: 0.8, layerId: 'ice_overlay'});
          var climb = L.imageOverlay(climbUrl, bounds, {opacity: 0.7, layerId: 'climb_overlay'});
 
-         ice.addTo(map);
-         climb.addTo(map);
-
-         // Wenn R-leaflet layerManager verfügbar ist: registriere Layer in Gruppen
-         // -> dann klappt Toggle in LayersControl.
+         // In R-leaflet (htmlwidgets) gibt es layerManager + Gruppen.
+         // Wichtig: richtige Signatur addLayer(layer, category, layerId, group, ctGroup, ctKey),
+         // sonst sind die Checkboxen im LayersControl „ohne Funktion“.
          try {
            if (map.layerManager && typeof map.layerManager.addLayer === 'function') {
-             map.layerManager.addLayer(ice,   'Eisdicke',     'ice_overlay');
-             map.layerManager.addLayer(climb, 'Climbability', 'climb_overlay');
+             map.layerManager.addLayer(ice,   'image', 'ice_overlay',   'Eisdicke',     null, null);
+             map.layerManager.addLayer(climb, 'image', 'climb_overlay', 'Climbability', null, null);
+
+             // Gruppen standardmäßig sichtbar
+             if (typeof map.layerManager.showGroup === 'function') {
+               map.layerManager.showGroup('Eisdicke');
+               map.layerManager.showGroup('Climbability');
+             }
+           } else {
+             // Fallback (z.B. plain Leaflet ohne layerManager)
+             ice.addTo(map);
+             climb.addTo(map);
            }
-         } catch(e) {}
+         } catch(e) {
+           // Fallback: direkt auf die Map
+           try { ice.addTo(map); climb.addTo(map); } catch(e2) {}
+         }
 
          window._iceOverlay   = ice;
          window._climbOverlay = climb;
@@ -1352,12 +1363,16 @@ if (length(time_labels) > 0L) {
 
        function pad3(n){ return String(n).padStart(3,'0'); }
 
-       // find overlays
-       var iceLayer=null, climbLayer=null;
-       map.eachLayer(function(l){
-         if(l && l.options && l.options.layerId === 'ice_overlay') iceLayer = l;
-         if(l && l.options && l.options.layerId === 'climb_overlay') climbLayer = l;
-       });
+       // find overlays (liegen evtl. in einer Gruppe -> nicht immer direkt in map.eachLayer sichtbar)
+       var iceLayer   = window._iceOverlay   || null;
+       var climbLayer = window._climbOverlay || null;
+
+       if (!iceLayer || !climbLayer) {
+         map.eachLayer(function(l){
+           if(!iceLayer   && l && l.options && l.options.layerId === 'ice_overlay')   iceLayer = l;
+           if(!climbLayer && l && l.options && l.options.layerId === 'climb_overlay') climbLayer = l;
+         });
+       }
 
        var initial = nSteps - 1;
        if (initial < 0) initial = 0;
