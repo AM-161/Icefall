@@ -1100,7 +1100,7 @@ for (i in seq_len(n_steps)) {
 # 11) Eisfall-Sonnendaten + Topo-URLs ---------------------------------
 
 sun_df <- readr::read_csv(
-  "data/Koordinaten_Wasserfaelle/icefalls_sun_horizon_2024_2025.csv",
+  "data/Koordinaten_Wasserfaelle/icefalls_sun_horizon.csv",
   show_col_types = FALSE
 )
 
