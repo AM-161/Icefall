@@ -58,13 +58,13 @@ jobs:
             any::png
           needs: check
 
-       - name: Build plots (all UIDs)
+      - name: Build plots (all UIDs)
         run: Rscript scripts/00_build_plots_all.R
 
       - name: Build list page (summary table)
         run: Rscript scripts/02_build_list_page.R
 
-      - name:  Build map (site/)
+      - name: Build map (site/)
         run: Rscript scripts/01_build_map.R
 
       - name: Configure Pages
