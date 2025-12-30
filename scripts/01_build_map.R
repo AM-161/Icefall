@@ -1289,43 +1289,23 @@ m <- m |>
     labFormat = labelFormat(digits = 2),
     position  = "bottomleft"
   ) |>
-  addCircles(
-    data        = sun_today,
-    lng         = ~longitude,
-    lat         = ~latitude,
-    radius      = 250,         # Meter (80–150 ist meist gut)
-    stroke      = FALSE,
-    fillColor   = "orange",
-    fillOpacity = 0.01,      # fast unsichtbar, aber noch klickbar
-    popup       = ~popup,
-    popupOptions = popupOptions(maxWidth = 440, maxHeight = 520),
-    group       = "Eisfälle"
-  ) |>
   addCircleMarkers(
     data        = sun_today,
     lng         = ~longitude,
     lat         = ~latitude,
-    radius      = 5,
+    radius      = 7,          # <- etwas größer (mobile friendly)
     color       = "black",
     weight      = 1,
     fillColor   = "orange",
     fillOpacity = 0.9,
     popup       = ~popup,
-    group       = "Eisfälle",
-    popupOptions = popupOptions(maxWidth = 440, maxHeight = 520)
+    group       = "Eisfälle"
   ) |>
   addLayersControl(
     baseGroups    = c("OSM", "Gelände (Topo)"),
     overlayGroups = c("Eisdicke", "Climbability", "Eisfälle"),
     options       = layersControlOptions(collapsed = FALSE)
-  )   |>
-  addControl(
-    position = "topleft",
-    html = htmltools::HTML(
-      "<div style='background:rgba(255,255,255,0.9);padding:6px 8px;border-radius:6px;'>
-         <a href='list.html' target='_blank' style='font-size:14px;font-weight:bold;'>📋 Eisfall-Liste</a>
-       </div>"
-    )   |>
+  ) |>
   addControl(
     position = "bottomright",
     html = htmltools::HTML(
@@ -1346,6 +1326,41 @@ m <- m |>
       )
     )
   )
+
+# -------------------------------------------------------------
+# Impressum toggle
+# -------------------------------------------------------------
+m <- htmlwidgets::onRender(
+  m,
+  "function(el, x) {
+     var header = el.querySelector('#impressum-header');
+     var body   = el.querySelector('#impressum-body');
+     if (!header || !body) return;
+     header.addEventListener('click', function() {
+       var visible = body.style.display !== 'none';
+       body.style.display = visible ? 'none' : 'block';
+       header.innerHTML = visible ? 'Impressum / Quellen ▾' : 'Impressum / Quellen ▴';
+     });
+   }"
+)
+
+# -------------------------------------------------------------
+# Climb summary toggle (falls best_html existiert)
+# -------------------------------------------------------------
+m <- htmlwidgets::onRender(
+  m,
+  "function(el, x) {
+     var header = el.querySelector('#climb-summary-header');
+     var body   = el.querySelector('#climb-summary-body');
+     if (!header || !body) return;
+     body.style.display = 'none';
+     header.addEventListener('click', function() {
+       var visible = body.style.display !== 'none';
+       body.style.display = visible ? 'none' : 'block';
+       header.innerHTML = visible ? 'Kletterbarkeit – Tagesübersicht (Prognose) ▾' : 'Kletterbarkeit – Tagesübersicht (Prognose) ▴';
+     });
+   }"
+)
 
 # Impressum toggle
 m <- htmlwidgets::onRender(
