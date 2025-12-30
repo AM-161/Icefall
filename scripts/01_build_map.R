@@ -1285,7 +1285,7 @@ m <- m |>
     data        = sun_today,
     lng         = ~longitude,
     lat         = ~latitude,
-    radius      = 150,         # Meter (80–150 ist meist gut)
+    radius      = 250,         # Meter (80–150 ist meist gut)
     stroke      = FALSE,
     fillColor   = "orange",
     fillOpacity = 0.01,      # fast unsichtbar, aber noch klickbar
