@@ -1281,6 +1281,18 @@ m <- m |>
     labFormat = labelFormat(digits = 2),
     position  = "bottomleft"
   ) |>
+  addCircles(
+    data        = sun_today,
+    lng         = ~longitude,
+    lat         = ~latitude,
+    radius      = 150,         # Meter (80–150 ist meist gut)
+    stroke      = FALSE,
+    fillColor   = "orange",
+    fillOpacity = 0.01,      # fast unsichtbar, aber noch klickbar
+    popup       = ~popup,
+    popupOptions = popupOptions(maxWidth = 440, maxHeight = 520),
+    group       = "Eisfälle"
+  ) |>
   addCircleMarkers(
     data        = sun_today,
     lng         = ~longitude,
