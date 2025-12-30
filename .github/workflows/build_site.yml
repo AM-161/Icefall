@@ -56,6 +56,7 @@ jobs:
             any::htmltools
             any::ncdf4
             any::png
+            any::readxl
           needs: check
 
       - name: Build plots (all UIDs)
