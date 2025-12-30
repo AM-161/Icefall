@@ -1310,7 +1310,14 @@ m <- m |>
     baseGroups    = c("OSM", "Gelände (Topo)"),
     overlayGroups = c("Eisdicke", "Climbability", "Eisfälle"),
     options       = layersControlOptions(collapsed = FALSE)
-  ) |>
+  )   |>
+  addControl(
+    position = "topleft",
+    html = htmltools::HTML(
+      "<div style='background:rgba(255,255,255,0.9);padding:6px 8px;border-radius:6px;'>
+         <a href='list.html' target='_blank' style='font-size:14px;font-weight:bold;'>📋 Eisfall-Liste</a>
+       </div>"
+    )   |>
   addControl(
     position = "bottomright",
     html = htmltools::HTML(
