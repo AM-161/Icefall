@@ -1,11 +1,11 @@
 # scripts/02_build_list_page.R
 # ============================================================
 # Build list page (summary table) for GitHub Pages
-# - reads meta: data/Koordinaten_Wasserfaelle/oetztalclimbingice_clean.csv
-# - reads assignments: data/AWS/icefalls_nearest_station.csv (optional extra fields)
-# - reads topo urls: data/Koordinaten_Wasserfaelle/icefalls_sun_horizon.csv (optional)
-# - reads model runs: data/ModelRuns/model_uid<uid>.csv
-# - writes: site/icefalls_table.json + site/list.html
+# - meta: data/Koordinaten_Wasserfaelle/oetztalclimbingice_clean.csv
+# - assignments: data/AWS/icefalls_nearest_station.csv (optional)
+# - topo urls: data/Koordinaten_Wasserfaelle/icefalls_sun_horizon.csv (optional)
+# - model runs: data/ModelRuns/model_uid<uid>.csv
+# - output: site/icefalls_table.json + site/list.html
 # ============================================================
 
 suppressPackageStartupMessages({
@@ -44,7 +44,6 @@ to_num <- function(x) {
 }
 
 read_any_delim <- function(path) {
-  # tries tab, semicolon, comma
   x <- tryCatch(readr::read_delim(path, delim = "\t", show_col_types = FALSE, progress = FALSE), error = function(e) NULL)
   if (!is.null(x) && ncol(x) > 1) return(x)
   x <- tryCatch(readr::read_delim(path, delim = ";", show_col_types = FALSE, progress = FALSE), error = function(e) NULL)
@@ -52,19 +51,16 @@ read_any_delim <- function(path) {
   readr::read_csv(path, show_col_types = FALSE, progress = FALSE)
 }
 
-col_or_na <- function(df, col) {
-  if (col %in% names(df)) df[[col]] else rep(NA, nrow(df))
+get_chr <- function(df, ...) {
+  cands <- c(...)
+  for (nm in cands) if (nm %in% names(df)) return(as.character(df[[nm]]))
+  rep(NA_character_, nrow(df))
 }
 
-coalesce_existing <- function(df, candidates, default = NA_character_) {
-  # returns first non-NA among existing columns
-  ok <- candidates[candidates %in% names(df)]
-  if (length(ok) == 0) return(rep(default, nrow(df)))
-  out <- df[[ok[1]]]
-  if (length(ok) >= 2) {
-    for (k in ok[-1]) out <- dplyr::coalesce(out, df[[k]])
-  }
-  out
+get_num <- function(df, ...) {
+  cands <- c(...)
+  for (nm in cands) if (nm %in% names(df)) return(to_num(df[[nm]]))
+  rep(NA_real_, nrow(df))
 }
 
 parse_time_any <- function(x, tz = TZ_LOCAL) {
@@ -74,7 +70,8 @@ parse_time_any <- function(x, tz = TZ_LOCAL) {
   t <- suppressWarnings(lubridate::ymd_hms(x, tz = tz))
   if (all(is.na(t))) t <- suppressWarnings(lubridate::ymd_hm(x, tz = tz))
   if (all(is.na(t))) t <- suppressWarnings(lubridate::parse_date_time(
-    x, orders = c("Ymd HMS", "Ymd HM", "Y-m-d H:M:S", "Y-m-d H:M"),
+    x,
+    orders = c("Ymd HMS", "Ymd HM", "Y-m-d H:M:S", "Y-m-d H:M", "Y-m-d\\TH:M:S", "Y-m-d\\TH:M"),
     tz = tz
   ))
   t
@@ -92,42 +89,32 @@ fmt_pct <- function(x, digits = 0) {
 # 1) Load meta (CSV)
 # ----------------------------
 if (!file.exists(PATH_META)) {
-  stop(
-    "Fehlt: ", PATH_META,
-    "\nVorhanden in data/Koordinaten_Wasserfaelle:\n",
-    paste(list.files("data/Koordinaten_Wasserfaelle", recursive = TRUE), collapse = "\n")
-  )
+  stop("Fehlt: ", PATH_META)
 }
 
-meta <- read_any_delim(PATH_META) %>%
-  rename_with(~tolower(.x)) %>%
-  mutate(
-    uid = as.integer(.data$uid)
-  )
+meta_raw <- read_any_delim(PATH_META) %>%
+  rename_with(tolower)
 
-# expected columns from your header (lowercased):
-# uid, name, latitude, longitude, hoehe_dgm5m, erstbegehnung, schwierigkeit,
-# eisfallhhe, zustieg, abstieg, beschreibung, ausrichtung
+if (!"uid" %in% names(meta_raw)) stop("META CSV hat keine Spalte 'uid'.")
 
-meta <- meta %>%
-  transmute(
-    uid = uid,
-    name = as.character(coalesce_existing(cur_data(), c("name"), default = NA_character_)),
-    latitude  = to_num(coalesce_existing(cur_data(), c("latitude","lat"), default = NA_character_)),
-    longitude = to_num(coalesce_existing(cur_data(), c("longitude","lon"), default = NA_character_)),
-    elev_m = to_num(coalesce_existing(cur_data(), c("hoehe_dgm5m","hoehe","höhe","elevation","elev_m"), default = NA_character_)),
-    difficulty = as.character(coalesce_existing(cur_data(), c("schwierigkeit","difficulty","grad"), default = NA_character_)),
-    icefall_height_m = to_num(coalesce_existing(cur_data(), c("eisfallhhe","eisfallhoehe","eisfallhöhe","height_m"), default = NA_character_)),
-    aspect = as.character(coalesce_existing(cur_data(), c("ausrichtung","aspect"), default = NA_character_)),
-    approach = as.character(coalesce_existing(cur_data(), c("zustieg","approach"), default = NA_character_)),
-    descent  = as.character(coalesce_existing(cur_data(), c("abstieg","descent"), default = NA_character_)),
-    first_ascent = as.character(coalesce_existing(cur_data(), c("erstbegehnung","first_ascent"), default = NA_character_)),
-    description  = as.character(coalesce_existing(cur_data(), c("beschreibung","description"), default = NA_character_))
-  ) %>%
+meta <- tibble::tibble(
+  uid = as.integer(meta_raw$uid),
+  name = get_chr(meta_raw, "name"),
+  latitude  = get_num(meta_raw, "latitude", "lat"),
+  longitude = get_num(meta_raw, "longitude", "lon"),
+  elev_m = get_num(meta_raw, "hoehe_dgm5m", "hoehe", "höhe", "elevation", "elev_m"),
+  difficulty = get_chr(meta_raw, "schwierigkeit", "difficulty", "grad"),
+  icefall_height_m = get_num(meta_raw, "eisfallhhe", "eisfallhoehe", "eisfallhöhe", "height_m", "icefall_height_m"),
+  aspect = get_chr(meta_raw, "ausrichtung", "aspect"),
+  approach = get_chr(meta_raw, "zustieg", "approach"),
+  descent  = get_chr(meta_raw, "abstieg", "descent"),
+  first_ascent = get_chr(meta_raw, "erstbegehnung", "first_ascent"),
+  description  = get_chr(meta_raw, "beschreibung", "description")
+) %>%
   filter(!is.na(uid))
 
 # ----------------------------
-# 2) Load assign (optional) to add station/meta fields
+# 2) Load assign (optional)
 # ----------------------------
 assign <- NULL
 if (file.exists(PATH_ASSIGN)) {
@@ -136,15 +123,14 @@ if (file.exists(PATH_ASSIGN)) {
 }
 
 # ----------------------------
-# 3) Load sun/topo urls (optional)
+# 3) Load topo urls (optional)
 # ----------------------------
 sun <- NULL
 if (file.exists(PATH_SUN)) {
   sun <- read_any_delim(PATH_SUN) %>%
+    rename_with(tolower) %>%
     mutate(uid = as.integer(uid)) %>%
-    select(any_of(c("uid","topo_url","topo_slug","name")))
-  # ensure at most 1 row per uid (take first non-empty topo_url)
-  sun <- sun %>%
+    select(any_of(c("uid", "topo_url", "topo_slug"))) %>%
     group_by(uid) %>%
     summarise(
       topo_url  = dplyr::coalesce(first(topo_url[topo_url != ""]), first(topo_url)),
@@ -154,7 +140,7 @@ if (file.exists(PATH_SUN)) {
 }
 
 # ----------------------------
-# 4) Read model run per uid and compute "tomorrow" metrics
+# 4) Model summary (tomorrow)
 # ----------------------------
 tomorrow <- as.Date(with_tz(Sys.time(), TZ_LOCAL) + days(1))
 
@@ -171,7 +157,6 @@ summarise_uid_model <- function(uid) {
   }
 
   df <- readr::read_csv(f, show_col_types = FALSE, progress = FALSE)
-
   if (!"time" %in% names(df)) {
     return(tibble(
       uid = uid,
@@ -186,7 +171,7 @@ summarise_uid_model <- function(uid) {
     mutate(
       time = parse_time_any(.data$time, tz = TZ_LOCAL),
       date = as.Date(time),
-      thickness_m = if ("thickness_m" %in% names(df)) to_num(thickness_m) else NA_real_,
+      thickness_m  = if ("thickness_m" %in% names(df)) to_num(thickness_m) else NA_real_,
       climbability = if ("climbability" %in% names(df)) to_num(climbability) else NA_real_
     ) %>%
     filter(!is.na(time))
@@ -207,7 +192,6 @@ summarise_uid_model <- function(uid) {
   i07 <- which.min(abs(as.numeric(difftime(df_day$time, t07, units = "mins"))))
   thickness_07 <- df_day$thickness_m[i07]
 
-  # max climbability tomorrow
   if (all(!is.finite(df_day$climbability))) {
     climb_max <- NA_real_
     climb_time <- NA_character_
@@ -232,13 +216,11 @@ uids <- sort(unique(meta$uid))
 model_sum <- bind_rows(lapply(uids, summarise_uid_model))
 
 # ----------------------------
-# 5) Merge everything
+# 5) Merge
 # ----------------------------
-out <- meta %>%
-  left_join(model_sum, by = "uid")
+out <- meta %>% left_join(model_sum, by = "uid")
 
 if (!is.null(assign)) {
-  # bring some useful columns if present
   assign_slim <- assign %>%
     select(any_of(c(
       "uid","station_id","source","dist_km","elev_diff_m",
@@ -249,12 +231,17 @@ if (!is.null(assign)) {
   out <- out %>%
     left_join(assign_slim, by = "uid") %>%
     mutate(
-      name = dplyr::coalesce(as.character(icefall_name), name),
+      name = dplyr::coalesce(as.character(icefall_name), name, paste0("UID ", uid)),
       latitude  = dplyr::coalesce(to_num(ice_lat), latitude),
       longitude = dplyr::coalesce(to_num(ice_lon), longitude),
       elev_m = dplyr::coalesce(to_num(icefall_elev_m), elev_m),
       icefall_height_m = dplyr::coalesce(to_num(icefall_height_m), icefall_height_m)
     )
+} else {
+  out$station_id <- NA_character_
+  out$source <- NA_character_
+  out$dist_km <- NA_real_
+  out$elev_diff_m <- NA_real_
 }
 
 if (!is.null(sun)) {
@@ -266,28 +253,25 @@ if (!is.null(sun)) {
 
 out <- out %>%
   mutate(
-    # plot url (must exist under site/plots/)
     plot_url = sprintf("plots/uid_%03d.png", uid),
-
     thickness_tomorrow_07_txt = fmt_num(thickness_tomorrow_07_m, 2),
     climb_max_tomorrow_txt    = fmt_pct(climb_max_tomorrow, 0),
     thickness_at_best_txt     = fmt_num(thickness_at_climb_max_m, 2)
   ) %>%
-  arrange(dplyr::desc(climb_max_tomorrow), dplyr::desc(thickness_tomorrow_07_m))
+  arrange(desc(climb_max_tomorrow), desc(thickness_tomorrow_07_m))
 
 # ----------------------------
-# 6) Write JSON (for JS table)
+# 6) Write JSON
 # ----------------------------
 jsonlite::write_json(out, OUT_JSON, pretty = TRUE, auto_unbox = TRUE, na = "null")
 message("✅ Wrote JSON: ", OUT_JSON)
 
 # ----------------------------
-# 7) Write list.html (sortable + search + fullscreen modal)
+# 7) Write list.html (NO sprintf -> avoids % issues)
 # ----------------------------
-# Note: this page expects:
-# - site/icefalls_table.json
-# - site/plots/uid_###.png (generated by scripts/00_build_plots_all.R)
-html <- sprintf(
+tom_str <- format(tomorrow, "%d.%m.%Y")
+
+html <- paste0(
 '<!doctype html>
 <html lang="de">
 <head>
@@ -302,12 +286,11 @@ html <- sprintf(
     .wrap { padding: 12px 14px; }
     .controls { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:10px; }
     input[type="search"] { padding:10px 12px; border:1px solid #ccc; border-radius:10px; min-width: 260px; font-size:16px; }
-    table { width:100%%; border-collapse: collapse; }
+    table { width:100%; border-collapse: collapse; }
     th, td { padding: 10px 8px; border-bottom: 1px solid #eee; vertical-align: top; }
     th { text-align:left; position: sticky; top: 0; background: #fff; z-index: 1; cursor:pointer; user-select:none; }
     tr:hover { background: #fafafa; }
     .muted { color:#666; font-size:12px; }
-    .pill { display:inline-block; padding:2px 8px; border:1px solid #ddd; border-radius:999px; font-size:12px; }
     .btn { display:inline-flex; gap:6px; align-items:center; padding:6px 10px; border:1px solid #ddd; border-radius:10px; background:#fff; cursor:pointer; }
     .btn:hover { background:#f4f4f4; }
     .small { font-size: 12px; }
@@ -316,7 +299,7 @@ html <- sprintf(
     #modal { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.8); z-index:9999; }
     #modal .inner { position:absolute; inset:0; display:flex; flex-direction:column; }
     #modal .bar { padding:10px; display:flex; gap:10px; align-items:center; justify-content:space-between; color:#fff; }
-    #modal img { flex:1; width:100%%; height:100%%; object-fit: contain; }
+    #modal img { flex:1; width:100%; height:100%; object-fit: contain; }
     #modal .bar button, #modal .bar a {
       color:#fff; border:1px solid rgba(255,255,255,0.35);
       background: transparent; padding:8px 12px; border-radius:10px; cursor:pointer;
@@ -326,7 +309,7 @@ html <- sprintf(
 
     @media (max-width: 720px) {
       th, td { padding: 12px 6px; }
-      input[type="search"] { width: 100%%; min-width: 0; }
+      input[type="search"] { width: 100%; min-width: 0; }
       header { gap:8px; }
     }
   </style>
@@ -335,7 +318,7 @@ html <- sprintf(
   <header>
     <a href="index.html">🗺️ Karte</a>
     <a href="list.html"><b>📋 Übersicht</b></a>
-    <span class="muted">Morgen: %s (TZ: Europe/Vienna)</span>
+    <span class="muted">Morgen: ', tom_str, ' (TZ: Europe/Vienna)</span>
   </header>
 
   <div class="wrap">
@@ -364,7 +347,6 @@ html <- sprintf(
     </table>
   </div>
 
-  <!-- Fullscreen modal -->
   <div id="modal">
     <div class="inner">
       <div class="bar">
@@ -400,12 +382,10 @@ html <- sprintf(
     const n = Number(x);
     return isFinite(n) ? n : NaN;
   }
-
   function str(x){
     if (x === null || x === undefined) return "";
     return String(x);
   }
-
   function matches(r, query){
     if(!query) return true;
     const t = query.toLowerCase();
@@ -415,18 +395,15 @@ html <- sprintf(
     ].map(str).join(" | ").toLowerCase();
     return blob.includes(t);
   }
-
   function cmp(a,b){
     const va = a[sortKey];
     const vb = b[sortKey];
 
-    // try numeric first
     const na = num(va), nb = num(vb);
     if (isFinite(na) && isFinite(nb)) return sortAsc ? (na-nb) : (nb-na);
     if (isFinite(na) && !isFinite(nb)) return sortAsc ? -1 : 1;
     if (!isFinite(na) && isFinite(nb)) return sortAsc ? 1 : -1;
 
-    // fallback string
     const sa = str(va).toLowerCase();
     const sb = str(vb).toLowerCase();
     if (sa < sb) return sortAsc ? -1 : 1;
@@ -440,7 +417,6 @@ html <- sprintf(
     openNewTab.href = plotUrl;
     modal.style.display = "block";
   }
-
   function closeFullscreen(){
     modal.style.display = "none";
     modalImg.src = "";
@@ -487,7 +463,6 @@ html <- sprintf(
       tbody.appendChild(tr);
     }
 
-    // bind plot buttons
     Array.from(document.querySelectorAll("button[data-plot]")).forEach(btn => {
       btn.addEventListener("click", () => {
         openFullscreen(btn.getAttribute("data-plot"), btn.getAttribute("data-title"));
@@ -521,14 +496,12 @@ html <- sprintf(
 })();
 </script>
 </body>
-</html>
-', format(tomorrow, "%d.%m.%Y")
+</html>'
 )
 
 writeLines(html, OUT_HTML, useBytes = TRUE)
 message("✅ Wrote HTML: ", OUT_HTML)
 
-# Final info
 message("Done. Outputs:")
 message(" - ", normalizePath(OUT_JSON, winslash = "/", mustWork = FALSE))
 message(" - ", normalizePath(OUT_HTML, winslash = "/", mustWork = FALSE))
