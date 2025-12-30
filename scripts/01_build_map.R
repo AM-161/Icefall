@@ -1301,6 +1301,19 @@ m <- m |>
     popup       = ~popup,
     group       = "Eisfälle"
   ) |>
+  addCircleMarkers(
+    data        = sun_today,
+    lng         = ~longitude,
+    lat         = ~latitude,
+    radius      = 30,         # Klickfläche Handy
+    color       = "transparent",
+    weight      = 0,
+    fillColor   = "transparent",
+    fillOpacity = 0,
+    opacity     = 0,
+    popup       = ~popup,     # wichtig: Popup hier auch setzen
+    group       = "Eisfälle"
+  ) |>
   addLayersControl(
     baseGroups    = c("OSM", "Gelände (Topo)"),
     overlayGroups = c("Eisdicke", "Climbability", "Eisfälle"),
