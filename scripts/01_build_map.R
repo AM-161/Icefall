@@ -1266,6 +1266,14 @@ if (isTRUE(preview_mode)) {
 }
 
 m <- m |>
+  addControl(
+    position = "topleft",
+    html = htmltools::HTML(
+      "<div style='background:rgba(255,255,255,0.9);padding:6px 8px;border-radius:6px;'>
+         <a href='list.html' target='_blank' style='font-size:14px;font-weight:bold;'>📋 Eisfall-Liste</a>
+       </div>"
+    )
+  )  |>
   fitBounds(lng1 = ext@xmin, lat1 = ext@ymin, lng2 = ext@xmax, lat2 = ext@ymax) |>
   addLegend(
     pal       = pal_ci,
