@@ -10,7 +10,7 @@ TZ_LOCAL <- "Europe/Vienna"
 # Inputs
 PATH_ASSIGN   <- "data/AWS/icefalls_nearest_station.csv"
 PATH_MODELS   <- "data/ModelRuns"
-META_DIR      <- "data/Koordinaten_Wasserfaelle/oetztalclimbingice_clean"
+META_PATH <- "data/Koordinaten_Wasserfaelle/oetztalclimbingice_clean.csv"
 
 # Outputs
 OUT_JSON <- "site/icefalls_table.json"
