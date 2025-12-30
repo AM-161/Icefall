@@ -1293,7 +1293,7 @@ m <- m |>
     data        = sun_today,
     lng         = ~longitude,
     lat         = ~latitude,
-    radius      = 7,          # <- etwas größer (mobile friendly)
+    radius      = 5,          # <- etwas größer (mobile friendly)
     color       = "black",
     weight      = 1,
     fillColor   = "orange",
@@ -1305,7 +1305,7 @@ m <- m |>
     data        = sun_today,
     lng         = ~longitude,
     lat         = ~latitude,
-    radius      = 30,         # Klickfläche Handy
+    radius      = 20,         # Klickfläche Handy
     color       = "transparent",
     weight      = 0,
     fillColor   = "transparent",
