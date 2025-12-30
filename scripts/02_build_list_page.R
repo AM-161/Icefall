@@ -55,7 +55,7 @@ assign_meta <- assign %>%
 # Name sauber setzen
 assign_meta <- assign_meta %>%
   mutate(
-    name_clean = dplyr::coalesce(icefall_name, name, paste0("UID ", uid))
+    name_clean = dplyr::coalesce(icefall_name, paste0("UID ", uid))
   )
 
 # --- Tomorrow window --------------------------------------------------
