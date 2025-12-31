@@ -1293,7 +1293,7 @@ m <- m |>
     data        = sun_today,
     lng         = ~longitude,
     lat         = ~latitude,
-    radius      = 5,          # <- etwas größer (mobile friendly)
+    radius      = 3,          # <- etwas größer (mobile friendly)
     color       = "black",
     weight      = 1,
     fillColor   = "orange",
