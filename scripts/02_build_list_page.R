@@ -1,7 +1,7 @@
 # scripts/02_build_list_page.R
 # ============================================================
 # Build list page (summary table) for GitHub Pages
-# - meta: data/Koordinaten_Wasserfaelle/oetztalclimbingice_clean.csv
+# - meta: data/Koordinaten_Wasserfaelle/tirol_eisklettern_links_entries_diff.csv
 # - assignments: data/AWS/icefalls_nearest_station.csv (optional)
 # - topo urls: data/Koordinaten_Wasserfaelle/icefalls_sun_horizon.csv (optional)
 # - model runs: data/ModelRuns/model_uid<uid>.csv
@@ -21,7 +21,7 @@ TZ_LOCAL <- "Europe/Vienna"
 # Paths
 # ----------------------------
 PATH_ASSIGN <- "data/AWS/icefalls_nearest_station.csv"
-PATH_META   <- "data/Koordinaten_Wasserfaelle/oetztalclimbingice_clean.csv"
+PATH_META   <- "data/Koordinaten_Wasserfaelle/tirol_eisklettern_links_entries_diff.csv"
 PATH_SUN    <- "data/Koordinaten_Wasserfaelle/icefalls_sun_horizon.csv"
 DIR_MODELS  <- "data/ModelRuns"
 
