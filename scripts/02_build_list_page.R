@@ -92,13 +92,62 @@ extract_hm <- function(x) {
   out <- rep(NA_character_, length(x))
   ok <- !is.na(x)
   if (any(ok)) {
-    m <- regexpr("\\b([01]?[0-9]|2[0-3]):[0-5][0-9]\\b", x[ok], perl = TRUE)
+    # IMPORTANT: use \b as word-boundary ("\b"), not "" (backspace)
+    m <- regexpr("\b([01]?[0-9]|2[0-3]):[0-5][0-9]\b", x[ok], perl = TRUE)
     hit <- m > 0
     out_ok <- rep(NA_character_, sum(ok))
     out_ok[hit] <- regmatches(x[ok], m)[hit]
     out[ok] <- out_ok
   }
   out
+}
+
+# Format duration in hours as human-friendly text (e.g., "17 min", "1 h 05 min")
+fmt_duration_h <- function(h) {
+  # Vectorised: h is a numeric vector in hours
+  h <- to_num(h)
+  out <- rep(NA_character_, length(h))
+  
+  ok <- is.finite(h)
+  if (!any(ok)) return(out)
+  
+  m  <- as.integer(round(h[ok] * 60))
+  hh <- m %/% 60
+  mm <- m %% 60
+  
+  out[ok] <- ifelse(
+    m < 60,
+    paste0(m, " min"),
+    ifelse(
+      mm == 0,
+      paste0(hh, " h"),
+      paste0(hh, " h ", sprintf("%02d", mm), " min")
+    )
+  )
+  
+  out
+}
+
+# Parse ISO-8601 timestamps that may end with 'Z' (UTC) and return local HH:MM
+parse_iso_z_to_local_hm <- function(x, tz_local = TZ_LOCAL) {
+  raw <- as.character(x)
+  raw[raw %in% c("", "NA", "NaN", "NULL")] <- NA_character_
+  
+  # make timezone explicit (Z -> +00:00)
+  raw2 <- raw
+  if (any(!is.na(raw2))) raw2[!is.na(raw2)] <- sub("Z$", "+00:00", raw2[!is.na(raw2)])
+  
+  t_utc <- suppressWarnings(lubridate::ymd_hms(raw2, tz = "UTC"))
+  if (all(is.na(t_utc))) t_utc <- suppressWarnings(lubridate::ymd_hm(raw2, tz = "UTC"))
+  if (all(is.na(t_utc))) t_utc <- suppressWarnings(lubridate::parse_date_time(
+    raw2,
+    orders = c("Ymd HMS", "Ymd HM", "Y-m-d H:M:S", "Y-m-d H:M", "Y-m-dTH:M:S", "Y-m-dTH:M"),
+    tz = "UTC"
+  ))
+  
+  t_loc <- suppressWarnings(lubridate::with_tz(t_utc, tz_local))
+  hm <- ifelse(!is.na(t_loc), format(t_loc, "%H:%M"), extract_hm(raw))
+  list(time_local = t_loc, hm = hm)
 }
 
 # ----------------------------
@@ -161,37 +210,41 @@ if (file.exists(PATH_SUN)) {
     sun_raw$date <- as.Date(NA)
   }
   
-  # sunrise time (first light / topo sunrise)
-  # NOTE: sunrise_topo is ISO-8601 with trailing 'Z' (=UTC). Convert to Europe/Vienna.
-  sunrise_raw <- get_chr(sun_raw, "sunrise_topo", "sunrise", "sunrise_time", "sonnenaufgang", "sun_first")
+  # sunrise/sunset (topo) in local time + duration
+  sunrise <- parse_iso_z_to_local_hm(get_chr(sun_raw, "sunrise_topo", "sunrise", "sunrise_time", "sonnenaufgang", "sun_first"))
+  sunset  <- parse_iso_z_to_local_hm(get_chr(sun_raw, "sunset_topo", "sunset", "sunset_time", "sonnenuntergang", "sun_last"))
   
-  # Make timezone explicit for robust parsing (Z -> +00:00)
-  sunrise_raw2 <- as.character(sunrise_raw)
-  sunrise_raw2[sunrise_raw2 %in% c("", "NA", "NaN", "NULL")] <- NA_character_
-  if (any(!is.na(sunrise_raw2))) {
-    sunrise_raw2[!is.na(sunrise_raw2)] <- sub("Z$", "+00:00", sunrise_raw2[!is.na(sunrise_raw2)])
-  }
-  
-  sunrise_utc <- suppressWarnings(lubridate::ymd_hms(sunrise_raw2, tz = "UTC"))
-  if (all(is.na(sunrise_utc))) sunrise_utc <- suppressWarnings(lubridate::ymd_hm(sunrise_raw2, tz = "UTC"))
-  if (all(is.na(sunrise_utc))) sunrise_utc <- suppressWarnings(lubridate::parse_date_time(
-    sunrise_raw2,
-    orders = c("Ymd HMS", "Ymd HM", "Y-m-d H:M:S", "Y-m-d H:M", "Y-m-dTH:M:S", "Y-m-dTH:M"),
-    tz = "UTC"
-  ))
-  
-  sunrise_local <- suppressWarnings(lubridate::with_tz(sunrise_utc, TZ_LOCAL))
-  sunrise_txt <- ifelse(!is.na(sunrise_local), format(sunrise_local, "%H:%M"), extract_hm(sunrise_raw))
+  sun_raw <- sun_raw %>%
+    mutate(
+      sunrise_tomorrow_txt = sunrise$hm,
+      sunset_tomorrow_txt  = sunset$hm,
+      sun_tomorrow_range_txt = dplyr::case_when(
+        !is.na(sunrise_tomorrow_txt) & !is.na(sunset_tomorrow_txt) ~ paste0(sunrise_tomorrow_txt, "–", sunset_tomorrow_txt),
+        !is.na(sunrise_tomorrow_txt) &  is.na(sunset_tomorrow_txt) ~ paste0(sunrise_tomorrow_txt, "–—"),
+        is.na(sunrise_tomorrow_txt) & !is.na(sunset_tomorrow_txt) ~ paste0("—–", sunset_tomorrow_txt),
+        TRUE ~ NA_character_
+      ),
+      sun_hours_tomorrow_h = get_num(sun_raw, "sun_hours_topo", "sun_hours", "sun_hours_h"),
+      sun_duration_tomorrow_txt = fmt_duration_h(sun_hours_tomorrow_h)
+    )
   
   sun <- sun_raw %>%
-    mutate(sunrise_tomorrow_txt = sunrise_txt) %>%
     filter(.data$date == tomorrow) %>%
-    select(any_of(c("uid", "topo_url", "topo_slug", "sunrise_tomorrow_txt"))) %>%
+    dplyr::select(dplyr::any_of(c(
+      "uid",
+      "topo_url",
+      "topo_slug",
+      "sun_tomorrow_range_txt",
+      "sun_hours_tomorrow_h",
+      "sun_duration_tomorrow_txt"
+    ))) %>%
     group_by(uid) %>%
     summarise(
       topo_url  = dplyr::coalesce(first(topo_url[topo_url != ""]), first(topo_url)),
       topo_slug = dplyr::coalesce(first(topo_slug[topo_slug != ""]), first(topo_slug)),
-      sunrise_tomorrow_txt = dplyr::coalesce(first(sunrise_tomorrow_txt[!is.na(sunrise_tomorrow_txt)]), first(sunrise_tomorrow_txt)),
+      sun_tomorrow_range_txt = dplyr::coalesce(first(sun_tomorrow_range_txt[sun_tomorrow_range_txt != "" & !is.na(sun_tomorrow_range_txt)]), first(sun_tomorrow_range_txt)),
+      sun_hours_tomorrow_h = dplyr::coalesce(first(sun_hours_tomorrow_h[is.finite(sun_hours_tomorrow_h)]), first(sun_hours_tomorrow_h)),
+      sun_duration_tomorrow_txt = dplyr::coalesce(first(sun_duration_tomorrow_txt[sun_duration_tomorrow_txt != "" & !is.na(sun_duration_tomorrow_txt)]), first(sun_duration_tomorrow_txt)),
       .groups = "drop"
     )
 }
@@ -277,7 +330,7 @@ out <- meta %>% left_join(model_sum, by = "uid")
 
 if (!is.null(assign)) {
   assign_slim <- assign %>%
-    select(any_of(c(
+    dplyr::select(dplyr::any_of(c(
       "uid","station_id","source","dist_km","elev_diff_m",
       "icefall_name","ice_lon","ice_lat","icefall_elev_m","icefall_height_m"
     ))) %>%
@@ -304,7 +357,9 @@ if (!is.null(sun)) {
 } else {
   out$topo_url <- NA_character_
   out$topo_slug <- NA_character_
-  out$sunrise_tomorrow_txt <- NA_character_
+  out$sun_tomorrow_range_txt <- NA_character_
+  out$sun_hours_tomorrow_h <- NA_real_
+  out$sun_duration_tomorrow_txt <- NA_character_
 }
 
 out <- out %>%
@@ -391,7 +446,8 @@ html <- paste0(
           <th data-key="name">Eisfall</th>
           <th data-key="difficulty">Schwierigkeit</th>
           <th data-key="elev_m">Höhe (m)</th>
-          <th data-key="sunrise_tomorrow_txt">Sonne morgen ab</th>
+          <th data-key="sun_tomorrow_range_txt">Sonne morgen</th>
+          <th data-key="sun_hours_tomorrow_h">Sonnendauer</th>
           <th data-key="thickness_tomorrow_07_m">Eisdicke morgen ~07:00 (m)</th>
           <th data-key="climb_max_tomorrow">Max. Kletterbarkeit morgen</th>
           <th data-key="climb_max_time_local">Uhrzeit</th>
@@ -434,7 +490,7 @@ html <- paste0(
   let sortAsc = false;
 
   // when sorting by these, ALWAYS push missing values to the bottom
-  const missingAlwaysBottomKeys = new Set(["climb_max_tomorrow", "thickness_tomorrow_07_m"]);
+  const missingAlwaysBottomKeys = new Set(["climb_max_tomorrow", "thickness_tomorrow_07_m", "sun_hours_tomorrow_h"]);
 
   function num(x){
     if (x === null || x === undefined) return NaN;
@@ -450,7 +506,7 @@ html <- paste0(
     const t = query.toLowerCase();
     const blob = [
       r.name, r.difficulty, r.aspect, r.station_id, r.source,
-      r.approach, r.descent, r.sunrise_tomorrow_txt
+      r.approach, r.descent, r.sun_tomorrow_range_txt, r.sun_duration_tomorrow_txt
     ].map(str).join(" | ").toLowerCase();
     return blob.includes(t);
   }
@@ -524,7 +580,8 @@ html <- paste0(
         </td>
         <td>${str(r.difficulty) || "<span class=\\"muted\\">—</span>"}</td>
         <td>${isFinite(num(r.elev_m)) ? Math.round(num(r.elev_m)) : "<span class=\\"muted\\">—</span>"}</td>
-        <td>${str(r.sunrise_tomorrow_txt) || "<span class=\\"muted\\">—</span>"}</td>
+        <td>${str(r.sun_tomorrow_range_txt) || "<span class=\"muted\">—</span>"}</td>
+        <td>${str(r.sun_duration_tomorrow_txt) || "<span class=\"muted\">—</span>"}</td>
         <td>${r.thickness_tomorrow_07_txt || "<span class=\\"muted\\">—</span>"}</td>
         <td>${r.climb_max_tomorrow_txt || "<span class=\\"muted\\">—</span>"}</td>
         <td>${str(r.climb_max_time_local) || "<span class=\\"muted\\">—</span>"}</td>
