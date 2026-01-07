@@ -60,19 +60,19 @@ nc_files <- character(length(chunk_starts))
 for (idx in seq_along(chunk_starts)) {
   cs <- as.Date(chunk_starts[idx])
   ce <- as.Date(min(cs + (chunk_days - 1), end_all))
-  
+
   message("Chunk: ", cs, " bis ", ce)
-  
+
   start_time <- sprintf("%sT00:00", format(cs, "%Y-%m-%d"))
   end_time   <- sprintf("%sT23:00", format(ce, "%Y-%m-%d"))
-  
+
   outfile <- file.path(
     out_dir,
     sprintf("inca_nordtirol_%s_%s.nc",
             format(cs, "%Y%m%d"),
             format(ce, "%Y%m%d"))
   )
-  
+
   if (file.exists(outfile) && file.info(outfile)$size > 0) {
     message("  -> übersprungen (existiert): ", outfile)
   } else {
@@ -84,17 +84,17 @@ for (idx in seq_along(chunk_starts)) {
       output_format = "netcdf",
       filename      = "inca_nordtirol"
     )
-    
+
     resp <- GET(
       url   = base_url_inca,
       query = query,
       write_disk(outfile, overwrite = TRUE)
     )
     stop_for_status(resp)
-    
+
     message("  -> gespeichert: ", outfile, " (", file.info(outfile)$size, " Bytes)")
   }
-  
+
   nc_files[idx] <- outfile
 }
 
@@ -110,7 +110,7 @@ convert_nc_time <- function(time_vals, time_units) {
   unit_str   <- sub(" since.*", "", time_units)
   origin_str <- sub(".*since ", "", time_units)
   origin     <- as.POSIXct(origin_str, tz = "UTC")
-  
+
   if (grepl("hour", unit_str, ignore.case = TRUE)) {
     origin + time_vals * 3600
   } else if (grepl("second", unit_str, ignore.case = TRUE)) {
@@ -159,18 +159,18 @@ names(inca_data) <- vars_found
 pos <- 1L
 for (i in seq_along(nc_files)) {
   nc <- nc_open(nc_files[i])
-  
+
   time_vals  <- ncvar_get(nc, time_dim_name)
   time_units <- ncatt_get(nc, time_dim_name, "units")$value
   nt_i       <- length(time_vals)
-  
+
   idx <- pos:(pos + nt_i - 1L)
   time_all[idx] <- convert_nc_time(time_vals, time_units)
-  
+
   for (v in vars_found) {
     inca_data[[v]][ , , idx] <- ncvar_get(nc, v)
   }
-  
+
   nc_close(nc)
   pos <- pos + nt_i
 }
@@ -353,46 +353,46 @@ FDH_sum_eff <- matrix(0, nrow = nx, ncol = ny)
 for (k in seq_len(nt)) {
   T_k  <- T2M_arr[ , , k]
   RH_k <- RH_arr[ , , k] / 100
-  
+
   if (all(is.na(T_k)) || all(is.na(RH_k))) {
     t_k_hours <- time_offset_hours[k]
     while (snap_idx_hist <= length(snap_hours_hist) &&
            t_k_hours >= snap_hours_hist[snap_idx_hist] - 0.5) {
-      
+
       FDH_k_snap <- FDH_sum_eff
       FDH_k_snap[FDH_k_snap < 0] <- 0
-      
+
       r_FDH_snap <- raster(t(FDH_k_snap))
       extent(r_FDH_snap) <- extent(r_template)
       crs(r_FDH_snap)    <- crs(r_template)
-      
+
       label_time <- t_start + snap_hours_hist[snap_idx_hist] * 3600
       label_str  <- format(label_time, "%d.%m.%Y")
-      
+
       FDH_hist_layers[[length(FDH_hist_layers) + 1L]] <- r_FDH_snap
       FDH_hist_labels <- c(FDH_hist_labels, label_str)
       FDH_hist_times  <- c(FDH_hist_times, label_time)
-      
+
       snap_idx_hist <- snap_idx_hist + 1L
     }
     next
   }
-  
+
   RH_k_eff <- RH_k
   RH_k_eff[is.na(RH_k_eff)] <- rh_opt
-  
+
   FDH_k <- pmax(-T_k, 0)
   MDH_k <- pmax( T_k, 0)
   W_k   <- W_arr[ , , k]
-  
+
   wind_norm <- (W_k - wind_ref) / wind_ref
   f_wind    <- 1 + k_wind * wind_norm
   f_wind[!is.finite(f_wind)] <- 1
   f_wind <- pmax(wind_min, pmin(wind_max, f_wind))
-  
+
   f_rh_peak <- exp(- (RH_k_eff - rh_opt)^2 / (2 * rh_sig^2))
   f_rh      <- 0.5 + 0.5 * f_rh_peak
-  
+
   s_height <- solar_height_factor_t[k]
   if (s_height == 0) {
     f_rad <- 1
@@ -401,33 +401,33 @@ for (k in seq_len(nt)) {
   }
   f_rad[!is.finite(f_rad)] <- 1
   f_rad <- pmax(0, pmin(1, f_rad))
-  
+
   f_time <- weight_time_t[k]
   if (!is.finite(f_time)) f_time <- 1
-  
+
   FDH_eff_k <- FDH_k * f_wind * f_rh * f_rad * f_time
   MDH_eff_k <- MDH_k * k_melt * f_time
-  
+
   FDH_sum_eff <- FDH_sum_eff + (FDH_eff_k - MDH_eff_k)
-  
+
   t_k_hours <- time_offset_hours[k]
   while (snap_idx_hist <= length(snap_hours_hist) &&
          t_k_hours >= snap_hours_hist[snap_idx_hist] - 0.5) {
-    
+
     FDH_k_snap <- FDH_sum_eff
     FDH_k_snap[FDH_k_snap < 0] <- 0
-    
+
     r_FDH_snap <- raster(t(FDH_k_snap))
     extent(r_FDH_snap) <- extent(r_template)
     crs(r_FDH_snap)    <- crs(r_template)
-    
+
     label_time <- t_start + snap_hours_hist[snap_idx_hist] * 3600
     label_str  <- format(label_time, "%d.%m.%Y")
-    
+
     FDH_hist_layers[[length(FDH_hist_layers) + 1L]] <- r_FDH_snap
     FDH_hist_labels <- c(FDH_hist_labels, label_str)
     FDH_hist_times  <- c(FDH_hist_times, label_time)
-    
+
     snap_idx_hist <- snap_idx_hist + 1L
   }
 }
@@ -527,37 +527,37 @@ climb_hist_labels <- character(0)
 if (length(FDH_hist_layers) > 0 && length(FDH_hist_labels) == length(FDH_hist_layers)) {
   climb_hist_layers <- vector("list", length(FDH_hist_layers))
   climb_hist_labels <- FDH_hist_labels
-  
+
   for (i in seq_along(FDH_hist_layers)) {
     r_fd <- FDH_hist_layers[[i]]
     h_i  <- r_fd * alpha
     h_i[r_fd < FDH_crit] <- NA
-    
+
     t_i    <- FDH_hist_times[i]
     dt_vec <- abs(as.numeric(difftime(time_vec, t_i, units = "hours")))
     k_i    <- which.min(dt_vec)
     if (!length(k_i) || !is.finite(k_i)) next
-    
+
     T_i_mat  <- t(T2M_arr[ , , k_i])
     RH_i_mat <- t(RH_arr[ , , k_i] / 100)
-    
+
     r_T_i    <- raster(T_i_mat);  extent(r_T_i)  <- extent(r_template); crs(r_T_i)  <- crs(r_template)
     r_RH_i   <- raster(RH_i_mat); extent(r_RH_i) <- extent(r_template); crs(r_RH_i) <- crs(r_template)
-    
+
     k_start   <- max(1, k_i - (72 - 1))
     idx3      <- k_start:k_i
     Tr3_i_arr <- apply(T2M_arr[ , , idx3, drop = FALSE], c(1, 2), mean, na.rm = TRUE)
     Tr3_i_mat <- t(Tr3_i_arr)
     r_Tr3_i   <- raster(Tr3_i_mat); extent(r_Tr3_i) <- extent(r_template); crs(r_Tr3_i) <- crs(r_template)
-    
+
     score_h_i  <- calc(h_i,    fun = function(h)  score_h_fun(h, h_min, h_opt))
     score_T_i  <- calc(r_T_i,  fun = function(Tv) score_T_fun(Tv, T_opt, T_min, T_max, range_T))
     score_T3_i <- calc(r_Tr3_i,fun = function(T3v)score_T_fun(T3v, T3_opt, T3_min, T3_max, range_T3))
     score_RH_i <- calc(r_RH_i, fun = function(rh) score_RH_fun(rh, RH_opt_c, RH_sig_c))
-    
+
     climb_i <- overlay(score_h_i, score_T_i, score_T3_i, score_RH_i,
                        fun = function(a, b, c, d) a * b * c * d)
-    
+
     climb_i[is.na(h_i) | h_i <= h_min] <- NA
     climb_i[!is.finite(climb_i)]       <- NA
     climb_i[climb_i <= 0]              <- NA
@@ -600,7 +600,7 @@ outfile_fc <- file.path(
 
 if (!file.exists(outfile_fc) || file.info(outfile_fc)$size == 0) {
   message("NWP-Chunk: ", start_fc, " bis ", end_fc)
-  
+
   query_fc <- list(
     parameters    = param_str_nwp,
     start         = start_fc,
@@ -609,7 +609,7 @@ if (!file.exists(outfile_fc) || file.info(outfile_fc)$size == 0) {
     output_format = "netcdf",
     filename      = "nwp_nordtirol"
   )
-  
+
   resp_fc <- GET(
     url   = base_url_nwp,
     query = query_fc,
@@ -628,117 +628,117 @@ fc_step_hours   <- NULL
 
 if (file.exists(outfile_fc)) {
   nc_fc <- nc_open(outfile_fc)
-  
+
   time_dim_name_fc <- names(nc_fc$dim)[grep("time", tolower(names(nc_fc$dim)))[1]]
   time_fc_vals     <- ncvar_get(nc_fc, time_dim_name_fc)
   time_fc_units    <- ncatt_get(nc_fc, time_dim_name_fc, "units")$value
   time_fc          <- convert_nc_time(time_fc_vals, time_fc_units)
-  
+
   nc_close(nc_fc)
-  
+
   lead_hours <- as.numeric(difftime(time_fc, t_now, units = "hours"))
   keep_fc    <- which(lead_hours >= 0 & lead_hours <= fc_h_max + 0.01)
-  
+
   if (length(keep_fc) > 0) {
     time_fc    <- time_fc[keep_fc]
     lead_hours <- lead_hours[keep_fc]
-    
+
     T2M_fc_brick  <- brick(outfile_fc, varname = "t2m")[[keep_fc]]
     RH2M_fc_brick <- brick(outfile_fc, varname = "rh2m")[[keep_fc]]
     U10_fc_brick  <- brick(outfile_fc, varname = "u10m")[[keep_fc]]
     V10_fc_brick  <- brick(outfile_fc, varname = "v10m")[[keep_fc]]
-    
+
     crs(T2M_fc_brick)  <- crs(r_template)
     crs(RH2M_fc_brick) <- crs(r_template)
     crs(U10_fc_brick)  <- crs(r_template)
     crs(V10_fc_brick)  <- crs(r_template)
-    
+
     T2M_fc  <- resample(T2M_fc_brick,  r_template, method = "bilinear")
     RH2M_fc <- resample(RH2M_fc_brick, r_template, method = "bilinear")
     U10_fc  <- resample(U10_fc_brick,  r_template, method = "bilinear")
     V10_fc  <- resample(V10_fc_brick,  r_template, method = "bilinear")
-    
+
     W_fc <- overlay(U10_fc, V10_fc, fun = function(u, v) sqrt(u^2 + v^2))
-    
+
     time_local_fc <- as.POSIXlt(time_fc, tz = "Europe/Vienna")
     doy_fc  <- time_local_fc$yday + 1
     hour_fc <- time_local_fc$hour + time_local_fc$min / 60 + time_local_fc$sec / 3600
-    
+
     delta_fc <- 23.44 * pi/180 * sin(2 * pi * (284 + doy_fc) / 365)
     H_fc     <- (hour_fc - 12) * 15 * pi/180
-    
+
     sin_alpha_fc <- sin(lat_center_rad) * sin(delta_fc) +
       cos(lat_center_rad) * cos(delta_fc) * cos(H_fc)
     sin_alpha_fc[sin_alpha_fc < 0] <- 0
     solar_height_factor_fc <- sin_alpha_fc
-    
+
     weight_time_fc <- rep(1, length(time_fc))
-    
+
     Tr3_fc <- calc(T2M_fc, fun = function(x) mean(x, na.rm = TRUE))
     score_T3_fc <- calc(Tr3_fc, fun = function(t3) {
       score_T_fun(t3, T3_opt, T3_min, T3_max, range_T3)
     })
-    
+
     time_fc_local <- as.POSIXct(format(time_fc, tz = "Europe/Vienna", usetz = TRUE),
                                 tz = "Europe/Vienna")
-    
+
     t0_local_fc <- as.POSIXct(format(t0, tz = "Europe/Vienna", usetz = TRUE),
                               tz = "Europe/Vienna")
-    
+
     target_hours_all  <- c(0, lead_hours)
     target_labels_all <- c(
       paste0(format(t0_local_fc, "%d.%m.%Y, %H:%M"), " (Analyse)"),
       format(time_fc_local, "%d.%m.%Y, %H:%M")
     )
-    
+
     ord <- order(target_hours_all)
     target_hours_all  <- target_hours_all[ord]
     target_labels_all <- target_labels_all[ord]
-    
+
     max_lead <- max(lead_hours) + 1e-6
     keep_idx <- target_hours_all <= max_lead
     target_hours_all  <- target_hours_all[keep_idx]
     target_labels_all <- target_labels_all[keep_idx]
-    
+
     target_times <- t0 + target_hours_all * 3600
-    
+
     ice_fc_layers   <- vector("list", length(target_hours_all))
     climb_fc_layers <- vector("list", length(target_hours_all))
     names(ice_fc_layers)   <- target_labels_all
     names(climb_fc_layers) <- target_labels_all
-    
+
     if (length(target_hours_all) > 0 && target_hours_all[1] == 0) {
       ice_fc_layers[[1]]   <- ice_thick_expo
       climb_fc_layers[[1]] <- climb_r
     }
-    
+
     FDH_base_r  <- r_FDH_eff
     delta_cum_r <- raster(FDH_base_r); delta_cum_r[] <- 0
-    
+
     next_target_idx <- which(target_hours_all > 0)[1]
     if (is.na(next_target_idx)) next_target_idx <- length(target_hours_all) + 1
-    
+
     for (k in seq_along(time_fc)) {
       dt_k <- lead_hours[k]
-      
+
       T_k  <- raster(T2M_fc,  layer = k)
       RH_k <- raster(RH2M_fc, layer = k) / 100
       W_k  <- raster(W_fc,    layer = k)
-      
+
       FDH_k <- calc(T_k, fun = function(x) pmax(-x, 0))
       MDH_k <- calc(T_k, fun = function(x) pmax( x, 0))
-      
+
       f_wind <- calc(W_k, fun = function(w) {
         wn <- (w - wind_ref) / wind_ref
         f  <- 1 + k_wind * wn
         f[!is.finite(f)] <- 1
         pmax(wind_min, pmin(wind_max, f))
       })
-      
+
       f_rh <- calc(RH_k, fun = function(rh) {
         0.5 + 0.5 * exp(- (rh - rh_opt)^2 / (2 * rh_sig^2))
       })
-      
+
       s_height_k <- solar_height_factor_fc[k]
       f_rad_k <- if (s_height_k == 0) {
         solar_index_r * 0 + 1
@@ -749,45 +749,45 @@ if (file.exists(outfile_fc)) {
           pmax(0, pmin(1, f))
         })
       }
-      
+
       f_time_k <- weight_time_fc[k]
-      
+
       FDH_eff_k <- FDH_k * f_wind * f_rh * f_rad_k * f_time_k
       MDH_eff_k <- MDH_k * k_melt * f_time_k
-      
+
       delta_cum_r <- delta_cum_r + (FDH_eff_k - MDH_eff_k)
-      
+
       while (next_target_idx <= length(target_hours_all) &&
              dt_k >= target_hours_all[next_target_idx] - 0.5 &&
              is.null(ice_fc_layers[[next_target_idx]])) {
-        
+
         FDH_fc_k <- FDH_base_r + delta_cum_r
         FDH_fc_k[FDH_fc_k < 0] <- 0
-        
+
         ice_k <- FDH_fc_k * alpha
         ice_k[FDH_fc_k < FDH_crit] <- NA
         names(ice_k) <- paste0("h_pot_expo_m_fc_", target_hours_all[next_target_idx], "h")
         ice_fc_layers[[next_target_idx]] <- ice_k
-        
+
         h_k <- ice_k
-        
+
         score_h_k  <- calc(h_k, fun = function(h)  score_h_fun(h, h_min, h_opt))
         score_T_k  <- calc(T_k, fun = function(Tv) score_T_fun(Tv, T_opt, T_min, T_max, range_T))
         score_RH_k <- calc(RH_k,fun = function(rh) score_RH_fun(rh, RH_opt_c, RH_sig_c))
-        
+
         climb_k <- overlay(score_h_k, score_T_k, score_T3_fc, score_RH_k,
                            fun = function(a, b, c, d) a * b * c * d)
-        
+
         climb_k[is.na(h_k) | h_k <= h_min] <- NA
         climb_k[!is.finite(climb_k)]       <- NA
         climb_k[climb_k <= 0]              <- NA
         names(climb_k) <- paste0("Climbability_fc_", target_hours_all[next_target_idx], "h")
         climb_fc_layers[[next_target_idx]] <- climb_k
-        
+
         next_target_idx <- next_target_idx + 1
       }
     }
-    
+
     if (any(vapply(ice_fc_layers, is.null, logical(1)))) {
       last_non_null <- max(which(!vapply(ice_fc_layers, is.null, logical(1))))
       for (i in seq_along(ice_fc_layers)) {
@@ -797,195 +797,16 @@ if (file.exists(outfile_fc)) {
         }
       }
     }
-    
+
     fc_step_hours <- target_hours_all
   }
 }
 
 # 9) Controls / HTML Summary (wie bei dir) -----------------------------
+# NOTE: Die "Kletterbarkeit – Tagesübersicht"-Box wurde auf Wunsch entfernt.
+#       Der Code zur Berechnung bleibt hier ggf. stehen, wird aber NICHT mehr als Control eingebunden.
 
 best_html <- NULL
-
-if (exists("climb_fc_layers") &&
-    !is.null(climb_fc_layers) &&
-    length(climb_fc_layers) > 0 &&
-    exists("target_times") &&
-    length(target_times) == length(climb_fc_layers) &&
-    exists("time_fc") &&
-    exists("T2M_fc") &&
-    exists("RH2M_fc")) {
-  
-  times_local_all <- lubridate::with_tz(target_times, "Europe/Vienna")
-  dates_all       <- as.Date(times_local_all)
-  
-  fc_idx_for_step <- integer(length(target_times))
-  for (s in seq_along(target_times)) {
-    dt <- abs(as.numeric(difftime(time_fc, target_times[s], units = "hours")))
-    if (all(is.na(dt))) fc_idx_for_step[s] <- NA_integer_
-    else fc_idx_for_step[s] <- which.min(dt)
-  }
-  
-  mean_all <- rep(NA_real_, length(climb_fc_layers))
-  for (i in seq_along(climb_fc_layers)) {
-    r_i <- climb_fc_layers[[i]]
-    if (!is.null(r_i)) mean_all[i] <- weighted_mean_alt(r_i)
-  }
-  
-  df_fc <- data.frame(
-    step       = seq_along(climb_fc_layers),
-    time_local = times_local_all,
-    date       = dates_all,
-    mean_ci    = mean_all,
-    fc_idx     = fc_idx_for_step,
-    stringsAsFactors = FALSE
-  )
-  
-  df_fc <- df_fc[is.finite(df_fc$mean_ci), , drop = FALSE]
-  
-  if (nrow(df_fc) > 0) {
-    
-    hour_icon <- function(h) {
-      if (h < 6 || h >= 22) "🌙" else if (h < 9) "🌅" else if (h < 18) "☀️" else "🌇"
-    }
-    
-    temp_tag <- function(T_mean, best = TRUE) {
-      if (!is.finite(T_mean)) return(NA_character_)
-      if (T_mean <= -18) {
-        if (best) "evtl. zu kalt / spröde" else "sehr kalt, spröde"
-      } else if (T_mean <= -10) {
-        "sehr kalt"
-      } else if (T_mean <= -5) {
-        if (best) "kalt, meist gut" else "kalt"
-      } else if (T_mean <= -2) {
-        if (best) "Optimalbereich (-4…-3 °C)" else "nahe Optimum"
-      } else if (T_mean <= 0) {
-        if (best) "mild, eher weich" else "mild"
-      } else {
-        "zu mild (>0 °C)"
-      }
-    }
-    
-    rh_tag <- function(RH_mean) {
-      if (!is.finite(RH_mean)) return(NA_character_)
-      if (RH_mean < 0.30) "zu trocken"
-      else if (RH_mean < 0.40) "eher trocken"
-      else if (RH_mean <= 0.50) "opt. Feuchte (40–50 %)"
-      else if (RH_mean <= 0.70) "leicht feucht"
-      else "sehr feucht"
-    }
-    
-    build_short_tag <- function(T_mean, RH_mean, best = TRUE) {
-      tt <- temp_tag(T_mean, best)
-      rr <- rh_tag(RH_mean)
-      tags <- na.omit(c(tt, rr))
-      if (length(tags) == 0) return("")
-      paste(tags, collapse = ", ")
-    }
-    
-    pict_rows <- character(0)
-    split_by_date <- split(df_fc, df_fc$date)
-    
-    for (d_str in names(split_by_date)) {
-      block <- split_by_date[[d_str]]
-      d <- as.Date(d_str)
-      n_block <- nrow(block)
-      
-      T_means_day  <- rep(NA_real_, n_block)
-      RH_means_day <- rep(NA_real_, n_block)
-      
-      for (j in seq_len(n_block)) {
-        k <- block$fc_idx[j]
-        if (is.finite(k) && k >= 1 && k <= raster::nlayers(T2M_fc)) {
-          T_r_j  <- raster::raster(T2M_fc,  layer = k)
-          RH_r_j <- raster::raster(RH2M_fc, layer = k) / 100
-          T_means_day[j]  <- weighted_mean_alt(T_r_j)
-          RH_means_day[j] <- weighted_mean_alt(RH_r_j)
-        }
-      }
-      
-      mask_good <- is.finite(T_means_day) & (T_means_day >= -18) & (T_means_day <= 0)
-      if (any(mask_good)) {
-        ci_cand <- block$mean_ci
-        ci_cand[!mask_good] <- NA
-        idx_best_local <- which.max(ci_cand)
-      } else {
-        idx_best_local <- which.max(block$mean_ci)
-      }
-      idx_min_local <- which.min(block$mean_ci)
-      
-      row_best <- block[idx_best_local, ]
-      row_min  <- block[idx_min_local, ]
-      
-      t_best <- row_best$time_local
-      t_min  <- row_min$time_local
-      
-      h_best <- lubridate::hour(t_best) + lubridate::minute(t_best) / 60
-      h_min  <- lubridate::hour(t_min)  + lubridate::minute(t_min)  / 60
-      
-      icon_best <- hour_icon(h_best)
-      icon_min  <- hour_icon(h_min)
-      
-      T_mean_best  <- T_means_day[idx_best_local]
-      RH_mean_best <- RH_means_day[idx_best_local]
-      T_mean_min   <- T_means_day[idx_min_local]
-      RH_mean_min  <- RH_means_day[idx_min_local]
-      
-      tag_best <- build_short_tag(T_mean_best, RH_mean_best, best = TRUE)
-      tag_min  <- build_short_tag(T_mean_min,  RH_mean_min,  best = FALSE)
-      
-      pict_rows <- c(
-        pict_rows,
-        sprintf(
-          "<tr>
-             <td>%s</td>
-             <td>
-               ▲ %s&nbsp;%s<br/>
-               <span style='font-size:10px;'>%s</span>
-             </td>
-             <td>
-               ▼ %s&nbsp;%s<br/>
-               <span style='font-size:10px;'>%s</span>
-             </td>
-           </tr>",
-          format(d, "%d.%m."),
-          format(t_best, "%H:%M"), icon_best, tag_best,
-          format(t_min,  "%H:%M"), icon_min,  tag_min
-        )
-      )
-    }
-    
-    if (length(pict_rows) > 0) {
-      table_html <- paste0(
-        "<table style='width:100%; border-collapse:collapse; font-size:12px;'>",
-        "<tr>",
-        "<th style='text-align:left;'>Tag</th>",
-        "<th style='text-align:left;'>Beste Zeit</th>",
-        "<th style='text-align:left;'>Schlechteste Zeit</th>",
-        "</tr>",
-        paste(pict_rows, collapse = ""),
-        "</table>"
-      )
-      
-      best_html <- htmltools::HTML(
-        paste0(
-          "<div id='climb-summary-box' style='font-size: 13px; background: rgba(255,255,255,0.9);",
-          "padding: 6px 8px; border-radius: 6px; max-width: 420px; line-height: 1.4;'>",
-          "<div id='climb-summary-header' style='font-weight:bold; cursor:pointer; margin-bottom:4px;'>",
-          "Kletterbarkeit – Tagesübersicht (Prognose) ▾",
-          "</div>",
-          "<div id='climb-summary-body' style='display:none;'>",
-          table_html,
-          "<div style='font-size:11px; margin-top:4px;'>",
-          "▲ höchster, ▼ niedrigster mittlerer Climbability-Wert (Gebietsmittel, höhengewichtet).<br/>",
-          "<span style='font-size:10px;'>\"evtl. zu kalt\" bedeutet: sehr tiefe Lufttemperaturen (z.B. &lt; −18 °C), Eis kann spröde sein.</span>",
-          "</div>",
-          "</div>",
-          "</div>"
-        )
-      )
-    }
-  }
-}
 
 # 10) Zeit-Layer zusammenbauen (wie bei dir; Steps bleiben identisch) ---
 
@@ -1067,17 +888,17 @@ write_overlay_png <- function(r, pal, file) {
   cols <- pal(v)
   cols[!is.finite(v)] <- "#00000000"
   cols[cols == "transparent"] <- "#00000000"
-  
+
   rgba <- hex_to_rgba(cols)
   nr <- raster::nrow(r)
   nc <- raster::ncol(r)
-  
+
   arr <- array(0, dim = c(nr, nc, 4))
   arr[, , 1] <- matrix(rgba[,1], nr, nc, byrow = TRUE)
   arr[, , 2] <- matrix(rgba[,2], nr, nc, byrow = TRUE)
   arr[, , 3] <- matrix(rgba[,3], nr, nc, byrow = TRUE)
   arr[, , 4] <- matrix(rgba[,4], nr, nc, byrow = TRUE)
-  
+
   png::writePNG(arr, target = file)
 }
 
@@ -1134,11 +955,10 @@ sun_today <- sun_today %>%
       paste0("<a href='", topo_url, "' target='_blank'>Topo öffnen</a>"),
       "(kein Topo-Link hinterlegt)"
     ),
-    
-    # --- Plot-Pfade (Variante A) ---
+
     uid_pad  = sprintf("%03d", uid),
     plot_png = paste0("plots/uid_", uid_pad, ".png"),
-    
+
     plot_block = paste0(
       "<hr style='margin:6px 0;'/>",
       "<div style='font-size:12px;'>",
@@ -1150,7 +970,7 @@ sun_today <- sun_today %>%
       "</a>",
       "</div>"
     ),
-    
+
     popup = ifelse(
       is.na(sun_hours_topo) | is.na(sunrise_topo) | is.na(sunset_topo),
       paste0(
@@ -1170,7 +990,6 @@ sun_today <- sun_today %>%
     )
   )
 
-
 # 12) Leaflet Map: nur 2 Overlays + Slider wechselt URL ----------------
 
 init_i <- n_steps
@@ -1178,22 +997,15 @@ m <- leaflet() |>
   addProviderTiles(providers$OpenStreetMap, group = "OSM") |>
   addProviderTiles(providers$OpenTopoMap,   group = "Gelände (Topo)")
 
-if (!is.null(best_html)) {
-  m <- m |>
-    addControl(position = "bottomright", html = best_html)
-}
+# ✅ (Entfernt) Kletterbarkeit – Tagesübersicht (Prognose)
+# if (!is.null(best_html)) {
+#   m <- m |>
+#     addControl(position = "bottomright", html = best_html)
+# }
 
-# -------------------------------------------------------------
-# IMPORTANT:
-# - In GitHub Pages (saveWidget -> site/index.html) nutzen wir externe PNGs.
-# - In der RStudio-Viewer-Vorschau funktionieren relative 'img/*.png' oft NICHT,
-#   weil der Viewer aus einem Temp-Ordner serviert. Dann sieht man "kein Overlay".
-#   => Preview-Mode: zeige initiale Layer mit addRasterImage (nur 2 Layer, klein).
-# -------------------------------------------------------------
 preview_mode <- interactive()
 
 if (isTRUE(preview_mode)) {
-  # Vorschau in R: direkt Raster rendern (nur der aktuelle Step)
   m <- m |>
     addRasterImage(
       ice_time_layers[[init_i]],
@@ -1213,11 +1025,10 @@ if (isTRUE(preview_mode)) {
       group   = 'Climbability',
       layerId = 'climb_preview'
     )
-  
+
 } else {
-  # Website: externe Overlays per JS (Leaflet imageOverlay)
   bounds_js <- sprintf("[[%f,%f],[%f,%f]]", ext@ymin, ext@xmin, ext@ymax, ext@xmax)
-  
+
   m <- htmlwidgets::onRender(
     m,
     sprintf(
@@ -1232,26 +1043,20 @@ if (isTRUE(preview_mode)) {
          var ice   = L.imageOverlay(iceUrl,   bounds, {opacity: 0.8, layerId: 'ice_overlay'});
          var climb = L.imageOverlay(climbUrl, bounds, {opacity: 0.7, layerId: 'climb_overlay'});
 
-         // In R-leaflet (htmlwidgets) gibt es layerManager + Gruppen.
-         // Wichtig: richtige Signatur addLayer(layer, category, layerId, group, ctGroup, ctKey),
-         // sonst sind die Checkboxen im LayersControl „ohne Funktion“.
          try {
            if (map.layerManager && typeof map.layerManager.addLayer === 'function') {
              map.layerManager.addLayer(ice,   'image', 'ice_overlay',   'Eisdicke',     null, null);
              map.layerManager.addLayer(climb, 'image', 'climb_overlay', 'Climbability', null, null);
 
-             // Gruppen standardmäßig sichtbar
              if (typeof map.layerManager.showGroup === 'function') {
                map.layerManager.showGroup('Eisdicke');
                map.layerManager.showGroup('Climbability');
              }
            } else {
-             // Fallback (z.B. plain Leaflet ohne layerManager)
              ice.addTo(map);
              climb.addTo(map);
            }
          } catch(e) {
-           // Fallback: direkt auf die Map
            try { ice.addTo(map); climb.addTo(map); } catch(e2) {}
          }
 
@@ -1293,7 +1098,7 @@ m <- m |>
     data        = sun_today,
     lng         = ~longitude,
     lat         = ~latitude,
-    radius      = 3,          # <- etwas größer (mobile friendly)
+    radius      = 3,
     color       = "black",
     weight      = 1,
     fillColor   = "orange",
@@ -1305,13 +1110,13 @@ m <- m |>
     data        = sun_today,
     lng         = ~longitude,
     lat         = ~latitude,
-    radius      = 20,         # Klickfläche Handy
+    radius      = 20,
     color       = "transparent",
     weight      = 0,
     fillColor   = "transparent",
     fillOpacity = 0,
     opacity     = 0,
-    popup       = ~popup,     # wichtig: Popup hier auch setzen
+    popup       = ~popup,
     group       = "Eisfälle"
   ) |>
   addLayersControl(
@@ -1340,69 +1145,37 @@ m <- m |>
     )
   )
 
-# -------------------------------------------------------------
-# Impressum toggle
-# -------------------------------------------------------------
+# ✅ FIX: Impressum-Toggle robust (Controls sind manchmal erst nach Render im DOM)
+# (Climbability-Tagesübersicht wurde entfernt -> kein Toggle dafür)
 m <- htmlwidgets::onRender(
   m,
   "function(el, x) {
-     var header = el.querySelector('#impressum-header');
-     var body   = el.querySelector('#impressum-body');
-     if (!header || !body) return;
-     header.addEventListener('click', function() {
-       var visible = body.style.display !== 'none';
-       body.style.display = visible ? 'none' : 'block';
-       header.innerHTML = visible ? 'Impressum / Quellen ▾' : 'Impressum / Quellen ▴';
-     });
-   }"
-)
+     function bindToggle(headerSel, bodySel, closedText, openText){
+       var header = el.querySelector(headerSel);
+       var body   = el.querySelector(bodySel);
+       if (!header || !body) return false;
+       if (header.dataset && header.dataset.bound === '1') return true;
 
-# -------------------------------------------------------------
-# Climb summary toggle (falls best_html existiert)
-# -------------------------------------------------------------
-m <- htmlwidgets::onRender(
-  m,
-  "function(el, x) {
-     var header = el.querySelector('#climb-summary-header');
-     var body   = el.querySelector('#climb-summary-body');
-     if (!header || !body) return;
-     body.style.display = 'none';
-     header.addEventListener('click', function() {
-       var visible = body.style.display !== 'none';
-       body.style.display = visible ? 'none' : 'block';
-       header.innerHTML = visible ? 'Kletterbarkeit – Tagesübersicht (Prognose) ▾' : 'Kletterbarkeit – Tagesübersicht (Prognose) ▴';
-     });
-   }"
-)
+       body.style.display = 'none';
+       header.innerHTML = closedText;
 
-# Impressum toggle
-m <- htmlwidgets::onRender(
-  m,
-  "function(el, x) {
-     var header = el.querySelector('#impressum-header');
-     var body   = el.querySelector('#impressum-body');
-     if (!header || !body) return;
-     header.addEventListener('click', function() {
-       var visible = body.style.display !== 'none';
-       body.style.display = visible ? 'none' : 'block';
-       header.innerHTML = visible ? 'Impressum / Quellen ▾' : 'Impressum / Quellen ▴';
-     });
-   }"
-)
+       header.addEventListener('click', function() {
+         var visible = body.style.display !== 'none';
+         body.style.display = visible ? 'none' : 'block';
+         header.innerHTML = visible ? closedText : openText;
+       });
 
-# Climb summary toggle
-m <- htmlwidgets::onRender(
-  m,
-  "function(el, x) {
-     var header = el.querySelector('#climb-summary-header');
-     var body   = el.querySelector('#climb-summary-body');
-     if (!header || !body) return;
-     body.style.display = 'none';
-     header.addEventListener('click', function() {
-       var visible = body.style.display !== 'none';
-       body.style.display = visible ? 'none' : 'block';
-       header.innerHTML = visible ? 'Kletterbarkeit – Tagesübersicht (Prognose) ▾' : 'Kletterbarkeit – Tagesübersicht (Prognose) ▴';
-     });
+       if (header.dataset) header.dataset.bound = '1';
+       return true;
+     }
+
+     var tries = 0;
+     var iv = setInterval(function(){
+       tries++;
+       var okImp = bindToggle('#impressum-header', '#impressum-body',
+                             'Impressum / Quellen ▾', 'Impressum / Quellen ▴');
+       if (okImp || tries > 30) clearInterval(iv);
+     }, 200);
    }"
 )
 
@@ -1410,7 +1183,7 @@ m <- htmlwidgets::onRender(
 if (length(time_labels) > 0L) {
   labels_js  <- paste0("['", paste(time_labels, collapse = "','"), "']")
   n_steps_js <- n_steps
-  
+
   js_code <- sprintf(
     "function(el, x) {
        var map = this;
@@ -1433,7 +1206,6 @@ if (length(time_labels) > 0L) {
 
        function pad3(n){ return String(n).padStart(3,'0'); }
 
-       // find overlays (liegen evtl. in einer Gruppe -> nicht immer direkt in map.eachLayer sichtbar)
        var iceLayer   = window._iceOverlay   || null;
        var climbLayer = window._climbOverlay || null;
 
@@ -1460,7 +1232,6 @@ if (length(time_labels) > 0L) {
            labelDiv.textContent = labels[step];
          }
 
-         // optional: preload next/prev for smooth slider
          var next = Math.min(nSteps, i+1);
          var prev = Math.max(1, i-1);
          var img1 = new Image(); img1.src = 'img/ice_' + pad3(next) + '.png';
@@ -1476,7 +1247,9 @@ if (length(time_labels) > 0L) {
          div.style.padding      = '8px 10px';
          div.style.borderRadius = '6px';
          div.style.minWidth     = '260px';
-         div.style.marginTop    = '70px';
+
+         // ✅ FIX: Mehr Abstand zur Layer-Control (größere Lücke)
+         div.style.marginTop    = '140px';
          div.style.marginRight  = '10px';
 
          var title = document.createElement('div');
@@ -1520,7 +1293,7 @@ if (length(time_labels) > 0L) {
     labels_js,
     n_steps_js
   )
-  
+
   m <- htmlwidgets::onRender(m, js_code)
 }
 
@@ -1530,7 +1303,6 @@ dir.create("site", showWarnings = FALSE)
 saveWidget(m, "site/index.html", selfcontained = FALSE)
 message("✅ Fertig: site/index.html + site/img/*.png")
 
-# In RStudio / interaktiv: Map direkt anzeigen (Preview-Mode zeigt Raster direkt)
 if (interactive()) {
   m
 }
