@@ -3,7 +3,7 @@
 # Build list page (summary table) for GitHub Pages
 # - meta: data/Koordinaten_Wasserfaelle/tirol_eisklettern_links_entries_diff.csv
 # - assignments: data/AWS/icefalls_nearest_station.csv (optional)
-# - topo urls: data/Koordinaten_Wasserfaelle/icefalls_sun_horizon.csv (optional)
+# - topo urls + topo sunrise: data/Koordinaten_Wasserfaelle/icefalls_sun_horizon.csv (optional)
 # - model runs: data/ModelRuns/model_uid<uid>.csv
 # - output: site/icefalls_table.json + site/list.html
 # ============================================================
@@ -85,6 +85,27 @@ fmt_pct <- function(x, digits = 0) {
   ifelse(is.finite(x), paste0(round(x * 100, digits), "%"), NA_character_)
 }
 
+# Extract first HH:MM from any string (or return NA)
+extract_hm <- function(x) {
+  x <- as.character(x)
+  x[x %in% c("", "NA", "NaN", "NULL")] <- NA_character_
+  out <- rep(NA_character_, length(x))
+  ok <- !is.na(x)
+  if (any(ok)) {
+    m <- regexpr("\\b([01]?[0-9]|2[0-3]):[0-5][0-9]\\b", x[ok], perl = TRUE)
+    hit <- m > 0
+    out_ok <- rep(NA_character_, sum(ok))
+    out_ok[hit] <- regmatches(x[ok], m)[hit]
+    out[ok] <- out_ok
+  }
+  out
+}
+
+# ----------------------------
+# 0) Tomorrow (local)
+# ----------------------------
+tomorrow <- as.Date(with_tz(Sys.time(), TZ_LOCAL) + days(1))
+
 # ----------------------------
 # 1) Load meta (CSV)
 # ----------------------------
@@ -123,18 +144,45 @@ if (file.exists(PATH_ASSIGN)) {
 }
 
 # ----------------------------
-# 3) Load topo urls (optional)
+# 3) Load topo urls + topo sunrise (optional)
 # ----------------------------
+# Expected (from earlier pipeline): columns like
+# uid, date, sunrise_topo, sunset_topo, sun_hours_topo, topo_url, topo_slug
 sun <- NULL
 if (file.exists(PATH_SUN)) {
-  sun <- read_any_delim(PATH_SUN) %>%
+  sun_raw <- read_any_delim(PATH_SUN) %>%
     rename_with(tolower) %>%
-    mutate(uid = as.integer(uid)) %>%
-    select(any_of(c("uid", "topo_url", "topo_slug"))) %>%
+    mutate(uid = as.integer(uid))
+
+  # date
+  if ("date" %in% names(sun_raw)) {
+    sun_raw <- sun_raw %>% mutate(date = as.Date(.data$date))
+  } else {
+    sun_raw$date <- as.Date(NA)
+  }
+
+  # sunrise time (first light / topo sunrise)
+  # NOTE: sunrise_topo is stored as ISO-8601 with Z (=UTC). Convert to Europe/Vienna.
+  sunrise_raw <- get_chr(sun_raw, "sunrise_topo", "sunrise", "sunrise_time", "sonnenaufgang", "sun_first")
+  sunrise_utc <- suppressWarnings(lubridate::ymd_hms(sunrise_raw, tz = "UTC"))
+  if (all(is.na(sunrise_utc))) sunrise_utc <- suppressWarnings(lubridate::ymd_hm(sunrise_raw, tz = "UTC"))
+  if (all(is.na(sunrise_utc))) sunrise_utc <- suppressWarnings(lubridate::parse_date_time(
+    sunrise_raw,
+    orders = c("Ymd HMS", "Ymd HM", "Y-m-d H:M:S", "Y-m-d H:M", "Y-m-d\TH:M:S\Z", "Y-m-d\TH:M\Z"),
+    tz = "UTC"
+  ))
+  sunrise_local <- suppressWarnings(lubridate::with_tz(sunrise_utc, TZ_LOCAL))
+  sunrise_txt <- ifelse(!is.na(sunrise_local), format(sunrise_local, "%H:%M"), extract_hm(sunrise_raw))
+
+  sun <- sun_raw %>%
+    mutate(sunrise_tomorrow_txt = sunrise_txt) %>%
+    filter(.data$date == tomorrow) %>%
+    select(any_of(c("uid", "topo_url", "topo_slug", "sunrise_tomorrow_txt"))) %>%
     group_by(uid) %>%
     summarise(
       topo_url  = dplyr::coalesce(first(topo_url[topo_url != ""]), first(topo_url)),
       topo_slug = dplyr::coalesce(first(topo_slug[topo_slug != ""]), first(topo_slug)),
+      sunrise_tomorrow_txt = dplyr::coalesce(first(sunrise_tomorrow_txt[!is.na(sunrise_tomorrow_txt)]), first(sunrise_tomorrow_txt)),
       .groups = "drop"
     )
 }
@@ -142,8 +190,6 @@ if (file.exists(PATH_SUN)) {
 # ----------------------------
 # 4) Model summary (tomorrow)
 # ----------------------------
-tomorrow <- as.Date(with_tz(Sys.time(), TZ_LOCAL) + days(1))
-
 summarise_uid_model <- function(uid) {
   f <- file.path(DIR_MODELS, sprintf("model_uid%s.csv", uid))
   if (!file.exists(f) || file.info(f)$size <= 0) {
@@ -249,6 +295,7 @@ if (!is.null(sun)) {
 } else {
   out$topo_url <- NA_character_
   out$topo_slug <- NA_character_
+  out$sunrise_tomorrow_txt <- NA_character_
 }
 
 out <- out %>%
@@ -335,7 +382,7 @@ html <- paste0(
           <th data-key="name">Eisfall</th>
           <th data-key="difficulty">Schwierigkeit</th>
           <th data-key="elev_m">Höhe (m)</th>
-          <th data-key="icefall_height_m">Eisfallhöhe (m)</th>
+          <th data-key="sunrise_tomorrow_txt">Sonne morgen ab</th>
           <th data-key="thickness_tomorrow_07_m">Eisdicke morgen ~07:00 (m)</th>
           <th data-key="climb_max_tomorrow">Max. Kletterbarkeit morgen</th>
           <th data-key="climb_max_time_local">Uhrzeit</th>
@@ -377,6 +424,9 @@ html <- paste0(
   let sortKey = "climb_max_tomorrow";
   let sortAsc = false;
 
+  // when sorting by these, ALWAYS push missing values to the bottom
+  const missingAlwaysBottomKeys = new Set(["climb_max_tomorrow", "thickness_tomorrow_07_m"]);
+
   function num(x){
     if (x === null || x === undefined) return NaN;
     const n = Number(x);
@@ -391,19 +441,31 @@ html <- paste0(
     const t = query.toLowerCase();
     const blob = [
       r.name, r.difficulty, r.aspect, r.station_id, r.source,
-      r.approach, r.descent
+      r.approach, r.descent, r.sunrise_tomorrow_txt
     ].map(str).join(" | ").toLowerCase();
     return blob.includes(t);
   }
+
   function cmp(a,b){
     const va = a[sortKey];
     const vb = b[sortKey];
 
     const na = num(va), nb = num(vb);
+
+    // numeric compare
+    if (missingAlwaysBottomKeys.has(sortKey)) {
+      const aOK = isFinite(na), bOK = isFinite(nb);
+      if (aOK && !bOK) return -1;
+      if (!aOK && bOK) return 1;
+      if (!aOK && !bOK) return 0;
+      return sortAsc ? (na-nb) : (nb-na);
+    }
+
     if (isFinite(na) && isFinite(nb)) return sortAsc ? (na-nb) : (nb-na);
     if (isFinite(na) && !isFinite(nb)) return sortAsc ? -1 : 1;
     if (!isFinite(na) && isFinite(nb)) return sortAsc ? 1 : -1;
 
+    // string compare
     const sa = str(va).toLowerCase();
     const sb = str(vb).toLowerCase();
     if (sa < sb) return sortAsc ? -1 : 1;
@@ -441,7 +503,7 @@ html <- paste0(
       const topoLink = r.topo_url ? `<a href="${r.topo_url}" target="_blank" rel="noopener">Topo</a>` : "<span class=\\"muted\\">—</span>";
       const plotUrl = r.plot_url || "";
       const plotBtn = plotUrl
-        ? `<button class="btn" data-plot="${plotUrl}" data-title="${str(r.name).replace(/"/g, "&quot;")}">🔍 Vollbild</button>`
+        ? `<button class="btn" data-plot="${plotUrl}" data-title="${str(r.name).replace(/\"/g, "&quot;")}">🔍 Vollbild</button>`
         : `<span class="muted">—</span>`;
 
       tr.innerHTML = `
@@ -453,7 +515,7 @@ html <- paste0(
         </td>
         <td>${str(r.difficulty) || "<span class=\\"muted\\">—</span>"}</td>
         <td>${isFinite(num(r.elev_m)) ? Math.round(num(r.elev_m)) : "<span class=\\"muted\\">—</span>"}</td>
-        <td>${isFinite(num(r.icefall_height_m)) ? Math.round(num(r.icefall_height_m)) : "<span class=\\"muted\\">—</span>"}</td>
+        <td>${str(r.sunrise_tomorrow_txt) || "<span class=\\"muted\\">—</span>"}</td>
         <td>${r.thickness_tomorrow_07_txt || "<span class=\\"muted\\">—</span>"}</td>
         <td>${r.climb_max_tomorrow_txt || "<span class=\\"muted\\">—</span>"}</td>
         <td>${str(r.climb_max_time_local) || "<span class=\\"muted\\">—</span>"}</td>
