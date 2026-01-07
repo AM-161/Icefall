@@ -71,7 +71,7 @@ parse_time_any <- function(x, tz = TZ_LOCAL) {
   if (all(is.na(t))) t <- suppressWarnings(lubridate::ymd_hm(x, tz = tz))
   if (all(is.na(t))) t <- suppressWarnings(lubridate::parse_date_time(
     x,
-    orders = c("Ymd HMS", "Ymd HM", "Y-m-d H:M:S", "Y-m-d H:M", "Y-m-d\\TH:M:S", "Y-m-d\\TH:M"),
+    orders = c("Ymd HMS", "Ymd HM", "Y-m-d H:M:S", "Y-m-d H:M", "Y-m-dTH:M:S", "Y-m-dTH:M"),
     tz = tz
   ))
   t
@@ -153,27 +153,36 @@ if (file.exists(PATH_SUN)) {
   sun_raw <- read_any_delim(PATH_SUN) %>%
     rename_with(tolower) %>%
     mutate(uid = as.integer(uid))
-
+  
   # date
   if ("date" %in% names(sun_raw)) {
     sun_raw <- sun_raw %>% mutate(date = as.Date(.data$date))
   } else {
     sun_raw$date <- as.Date(NA)
   }
-
+  
   # sunrise time (first light / topo sunrise)
-  # NOTE: sunrise_topo is stored as ISO-8601 with Z (=UTC). Convert to Europe/Vienna.
+  # NOTE: sunrise_topo is ISO-8601 with trailing 'Z' (=UTC). Convert to Europe/Vienna.
   sunrise_raw <- get_chr(sun_raw, "sunrise_topo", "sunrise", "sunrise_time", "sonnenaufgang", "sun_first")
-  sunrise_utc <- suppressWarnings(lubridate::ymd_hms(sunrise_raw, tz = "UTC"))
-  if (all(is.na(sunrise_utc))) sunrise_utc <- suppressWarnings(lubridate::ymd_hm(sunrise_raw, tz = "UTC"))
+  
+  # Make timezone explicit for robust parsing (Z -> +00:00)
+  sunrise_raw2 <- as.character(sunrise_raw)
+  sunrise_raw2[sunrise_raw2 %in% c("", "NA", "NaN", "NULL")] <- NA_character_
+  if (any(!is.na(sunrise_raw2))) {
+    sunrise_raw2[!is.na(sunrise_raw2)] <- sub("Z$", "+00:00", sunrise_raw2[!is.na(sunrise_raw2)])
+  }
+  
+  sunrise_utc <- suppressWarnings(lubridate::ymd_hms(sunrise_raw2, tz = "UTC"))
+  if (all(is.na(sunrise_utc))) sunrise_utc <- suppressWarnings(lubridate::ymd_hm(sunrise_raw2, tz = "UTC"))
   if (all(is.na(sunrise_utc))) sunrise_utc <- suppressWarnings(lubridate::parse_date_time(
-    sunrise_raw,
-    orders = c("Ymd HMS", "Ymd HM", "Y-m-d H:M:S", "Y-m-d H:M", "Y-m-d\TH:M:S\Z", "Y-m-d\TH:M\Z"),
+    sunrise_raw2,
+    orders = c("Ymd HMS", "Ymd HM", "Y-m-d H:M:S", "Y-m-d H:M", "Y-m-dTH:M:S", "Y-m-dTH:M"),
     tz = "UTC"
   ))
+  
   sunrise_local <- suppressWarnings(lubridate::with_tz(sunrise_utc, TZ_LOCAL))
   sunrise_txt <- ifelse(!is.na(sunrise_local), format(sunrise_local, "%H:%M"), extract_hm(sunrise_raw))
-
+  
   sun <- sun_raw %>%
     mutate(sunrise_tomorrow_txt = sunrise_txt) %>%
     filter(.data$date == tomorrow) %>%
@@ -201,7 +210,7 @@ summarise_uid_model <- function(uid) {
       thickness_at_climb_max_m = NA_real_
     ))
   }
-
+  
   df <- readr::read_csv(f, show_col_types = FALSE, progress = FALSE)
   if (!"time" %in% names(df)) {
     return(tibble(
@@ -212,7 +221,7 @@ summarise_uid_model <- function(uid) {
       thickness_at_climb_max_m = NA_real_
     ))
   }
-
+  
   df <- df %>%
     mutate(
       time = parse_time_any(.data$time, tz = TZ_LOCAL),
@@ -221,7 +230,7 @@ summarise_uid_model <- function(uid) {
       climbability = if ("climbability" %in% names(df)) to_num(climbability) else NA_real_
     ) %>%
     filter(!is.na(time))
-
+  
   df_day <- df %>% filter(date == tomorrow)
   if (nrow(df_day) == 0) {
     return(tibble(
@@ -232,12 +241,12 @@ summarise_uid_model <- function(uid) {
       thickness_at_climb_max_m = NA_real_
     ))
   }
-
+  
   # thickness at ~07:00 local (closest)
   t07 <- as.POSIXct(paste0(format(tomorrow, "%Y-%m-%d"), " 07:00:00"), tz = TZ_LOCAL)
   i07 <- which.min(abs(as.numeric(difftime(df_day$time, t07, units = "mins"))))
   thickness_07 <- df_day$thickness_m[i07]
-
+  
   if (all(!is.finite(df_day$climbability))) {
     climb_max <- NA_real_
     climb_time <- NA_character_
@@ -248,7 +257,7 @@ summarise_uid_model <- function(uid) {
     climb_time <- format(df_day$time[imax], "%d.%m.%Y %H:%M")
     thick_at_best <- df_day$thickness_m[imax]
   }
-
+  
   tibble(
     uid = uid,
     thickness_tomorrow_07_m = thickness_07,
@@ -273,7 +282,7 @@ if (!is.null(assign)) {
       "icefall_name","ice_lon","ice_lat","icefall_elev_m","icefall_height_m"
     ))) %>%
     mutate(uid = as.integer(uid))
-
+  
   out <- out %>%
     left_join(assign_slim, by = "uid") %>%
     mutate(
@@ -319,7 +328,7 @@ message("✅ Wrote JSON: ", OUT_JSON)
 tom_str <- format(tomorrow, "%d.%m.%Y")
 
 html <- paste0(
-'<!doctype html>
+  '<!doctype html>
 <html lang="de">
 <head>
   <meta charset="utf-8"/>
