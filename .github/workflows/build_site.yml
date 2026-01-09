@@ -45,6 +45,7 @@ jobs:
           packages: |
             any::sessioninfo
             any::httr2
+            any::httr
             any::jsonlite
             any::dplyr
             any::tidyr
