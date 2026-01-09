@@ -1,21 +1,37 @@
-name: Build & Deploy Icefall Map (daily)
+name: Build icefall plots
 
 on:
-  schedule:
-    - cron: "0 16 * * *"   # 17:00 Tirol im Winter (CET)
   workflow_dispatch:
-permissions:
-  contents: read
-  pages: write
-  id-token: write
+    inputs:
+      only_uid:
+        description: "Optional: test a single UID (e.g. 276) or comma list (e.g. 34,87,276)"
+        required: false
+        default: ""
+  schedule:
+    - cron: "20 16 * * *"  # 17:20 Europe/Vienna im Winter (UTC+1). Passe bei Bedarf an.
 
 concurrency:
-  group: "pages"
+  group: build-plots
   cancel-in-progress: true
+
+permissions:
+  contents: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      TZ: Europe/Vienna
+      LOG_LEVEL: "1"
+      N_WORKERS: "2"
+      INCA_KEY_DECIMALS: "3"
+      NWP_KEY_DECIMALS: "3"
+      ONLY_UID: ${{ github.event.inputs.only_uid }}
+
+      # Cache "Version" zum manuellen Busting, wenn du mal Formate änderst
+      CACHE_VERSION: "v1"
+      # Setze die Saison händisch (einmal pro Winter) oder lass es so, wenn du es egal findest.
+      SEASON: "2025_2026"
 
     steps:
       - name: Checkout
@@ -23,58 +39,58 @@ jobs:
 
       - name: Setup R
         uses: r-lib/actions/setup-r@v2
-        with:
-          use-public-rspm: true
 
-      - name: System dependencies (spatial + netcdf)
+      - name: System dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            libcurl4-openssl-dev libssl-dev libxml2-dev \
-            libgdal-dev libproj-dev libgeos-dev libudunits2-dev \
-            libnetcdf-dev netcdf-bin
+          sudo apt-get install -y libcurl4-openssl-dev libssl-dev libxml2-dev
 
-      - name: Install R packages
+      - name: Install R deps (cached)
         uses: r-lib/actions/setup-r-dependencies@v2
         with:
-          extra-packages: |
-            any::httr
+          cache: true
+          packages: |
             any::httr2
             any::jsonlite
             any::dplyr
-            any::lubridate
             any::tidyr
+            any::lubridate
             any::readr
-            any::tibble
             any::zoo
             any::ggplot2
             any::patchwork
-            any::raster
-            any::leaflet
-            any::htmlwidgets
-            any::htmltools
-            any::ncdf4
-            any::png
-            any::readxl
-          needs: check
+            any::parallel
 
-      - name: Build plots (all UIDs)
-        run: Rscript scripts/00_build_plots_all.R
-
-      - name: Build list page (summary table)
-        run: Rscript scripts/02_build_list_page.R
-
-      - name: Build map (site/)
-        run: Rscript scripts/01_build_map.R
-
-      - name: Configure Pages
-        uses: actions/configure-pages@v5
-
-      - name: Upload Pages artifact (site/)
-        uses: actions/upload-pages-artifact@v3
+      # ---- Persistiere DEINE Daten-Caches zwischen Runs ----
+      - name: Restore data caches
+        uses: actions/cache@v4
         with:
-          path: site
+          path: |
+            data/_cache_geosphere
+            data/inca_nordtirol
+            data/nwp_2500m_forecast
+          key: geosphere-${{ runner.os }}-${{ env.CACHE_VERSION }}-${{ env.SEASON }}
+          restore-keys: |
+            geosphere-${{ runner.os }}-${{ env.CACHE_VERSION }}-
 
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Run model + plots
+        run: |
+          Rscript scripts/00_build_all_plots_oneprocess.R
+
+      # Optional: Outputs committen (Plots + ModelRuns)
+      - name: Commit outputs
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Update model runs + plots"
+          file_pattern: |
+            data/ModelRuns/*.csv
+            site/plots/*.png
+
+      # Alternative zu Commit: als Artefakt hochladen (wenn du nicht ins Repo committen willst)
+      # - name: Upload outputs
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: modelruns-and-plots
+      #     path: |
+      #       data/ModelRuns
+      #       site/plots
