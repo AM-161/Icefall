@@ -92,8 +92,8 @@ extract_hm <- function(x) {
   out <- rep(NA_character_, length(x))
   ok <- !is.na(x)
   if (any(ok)) {
-    # IMPORTANT: use \b as word-boundary ("\b"), not "" (backspace)
-    m <- regexpr("\b([01]?[0-9]|2[0-3]):[0-5][0-9]\b", x[ok], perl = TRUE)
+    # IMPORTANT: word-boundary must be \\b (R would turn \b into backspace)
+    m <- regexpr("\\\\b([01]?[0-9]|2[0-3]):[0-5][0-9]\\\\b", x[ok], perl = TRUE)
     hit <- m > 0
     out_ok <- rep(NA_character_, sum(ok))
     out_ok[hit] <- regmatches(x[ok], m)[hit]
@@ -107,14 +107,14 @@ fmt_duration_h <- function(h) {
   # Vectorised: h is a numeric vector in hours
   h <- to_num(h)
   out <- rep(NA_character_, length(h))
-  
+
   ok <- is.finite(h)
   if (!any(ok)) return(out)
-  
+
   m  <- as.integer(round(h[ok] * 60))
   hh <- m %/% 60
   mm <- m %% 60
-  
+
   out[ok] <- ifelse(
     m < 60,
     paste0(m, " min"),
@@ -124,7 +124,7 @@ fmt_duration_h <- function(h) {
       paste0(hh, " h ", sprintf("%02d", mm), " min")
     )
   )
-  
+
   out
 }
 
@@ -132,11 +132,11 @@ fmt_duration_h <- function(h) {
 parse_iso_z_to_local_hm <- function(x, tz_local = TZ_LOCAL) {
   raw <- as.character(x)
   raw[raw %in% c("", "NA", "NaN", "NULL")] <- NA_character_
-  
+
   # make timezone explicit (Z -> +00:00)
   raw2 <- raw
   if (any(!is.na(raw2))) raw2[!is.na(raw2)] <- sub("Z$", "+00:00", raw2[!is.na(raw2)])
-  
+
   t_utc <- suppressWarnings(lubridate::ymd_hms(raw2, tz = "UTC"))
   if (all(is.na(t_utc))) t_utc <- suppressWarnings(lubridate::ymd_hm(raw2, tz = "UTC"))
   if (all(is.na(t_utc))) t_utc <- suppressWarnings(lubridate::parse_date_time(
@@ -144,7 +144,7 @@ parse_iso_z_to_local_hm <- function(x, tz_local = TZ_LOCAL) {
     orders = c("Ymd HMS", "Ymd HM", "Y-m-d H:M:S", "Y-m-d H:M", "Y-m-dTH:M:S", "Y-m-dTH:M"),
     tz = "UTC"
   ))
-  
+
   t_loc <- suppressWarnings(lubridate::with_tz(t_utc, tz_local))
   hm <- ifelse(!is.na(t_loc), format(t_loc, "%H:%M"), extract_hm(raw))
   list(time_local = t_loc, hm = hm)
@@ -202,18 +202,18 @@ if (file.exists(PATH_SUN)) {
   sun_raw <- read_any_delim(PATH_SUN) %>%
     rename_with(tolower) %>%
     mutate(uid = as.integer(uid))
-  
+
   # date
   if ("date" %in% names(sun_raw)) {
     sun_raw <- sun_raw %>% mutate(date = as.Date(.data$date))
   } else {
     sun_raw$date <- as.Date(NA)
   }
-  
+
   # sunrise/sunset (topo) in local time + duration
   sunrise <- parse_iso_z_to_local_hm(get_chr(sun_raw, "sunrise_topo", "sunrise", "sunrise_time", "sonnenaufgang", "sun_first"))
   sunset  <- parse_iso_z_to_local_hm(get_chr(sun_raw, "sunset_topo", "sunset", "sunset_time", "sonnenuntergang", "sun_last"))
-  
+
   sun_raw <- sun_raw %>%
     mutate(
       sunrise_tomorrow_txt = sunrise$hm,
@@ -227,7 +227,7 @@ if (file.exists(PATH_SUN)) {
       sun_hours_tomorrow_h = get_num(sun_raw, "sun_hours_topo", "sun_hours", "sun_hours_h"),
       sun_duration_tomorrow_txt = fmt_duration_h(sun_hours_tomorrow_h)
     )
-  
+
   sun <- sun_raw %>%
     filter(.data$date == tomorrow) %>%
     dplyr::select(dplyr::any_of(c(
@@ -263,7 +263,7 @@ summarise_uid_model <- function(uid) {
       thickness_at_climb_max_m = NA_real_
     ))
   }
-  
+
   df <- readr::read_csv(f, show_col_types = FALSE, progress = FALSE)
   if (!"time" %in% names(df)) {
     return(tibble(
@@ -274,7 +274,7 @@ summarise_uid_model <- function(uid) {
       thickness_at_climb_max_m = NA_real_
     ))
   }
-  
+
   df <- df %>%
     mutate(
       time = parse_time_any(.data$time, tz = TZ_LOCAL),
@@ -283,7 +283,7 @@ summarise_uid_model <- function(uid) {
       climbability = if ("climbability" %in% names(df)) to_num(climbability) else NA_real_
     ) %>%
     filter(!is.na(time))
-  
+
   df_day <- df %>% filter(date == tomorrow)
   if (nrow(df_day) == 0) {
     return(tibble(
@@ -294,12 +294,12 @@ summarise_uid_model <- function(uid) {
       thickness_at_climb_max_m = NA_real_
     ))
   }
-  
+
   # thickness at ~07:00 local (closest)
   t07 <- as.POSIXct(paste0(format(tomorrow, "%Y-%m-%d"), " 07:00:00"), tz = TZ_LOCAL)
   i07 <- which.min(abs(as.numeric(difftime(df_day$time, t07, units = "mins"))))
   thickness_07 <- df_day$thickness_m[i07]
-  
+
   if (all(!is.finite(df_day$climbability))) {
     climb_max <- NA_real_
     climb_time <- NA_character_
@@ -310,7 +310,7 @@ summarise_uid_model <- function(uid) {
     climb_time <- format(df_day$time[imax], "%d.%m.%Y %H:%M")
     thick_at_best <- df_day$thickness_m[imax]
   }
-  
+
   tibble(
     uid = uid,
     thickness_tomorrow_07_m = thickness_07,
@@ -335,7 +335,7 @@ if (!is.null(assign)) {
       "icefall_name","ice_lon","ice_lat","icefall_elev_m","icefall_height_m"
     ))) %>%
     mutate(uid = as.integer(uid))
-  
+
   out <- out %>%
     left_join(assign_slim, by = "uid") %>%
     mutate(
@@ -378,7 +378,9 @@ jsonlite::write_json(out, OUT_JSON, pretty = TRUE, auto_unbox = TRUE, na = "null
 message("✅ Wrote JSON: ", OUT_JSON)
 
 # ----------------------------
-# 7) Write list.html (NO sprintf -> avoids % issues)
+# 7) Write list.html
+#    IMPORTANT FIX: avoid nested JS template literals (backticks inside backticks)
+#    because that causes: "Missing } in template expression" in browsers.
 # ----------------------------
 tom_str <- format(tomorrow, "%d.%m.%Y")
 
@@ -489,6 +491,8 @@ html <- paste0(
   let sortKey = "climb_max_tomorrow";
   let sortAsc = false;
 
+  const dash = \'<span class="muted">—</span>\';
+
   // when sorting by these, ALWAYS push missing values to the bottom
   const missingAlwaysBottomKeys = new Set(["climb_max_tomorrow", "thickness_tomorrow_07_m", "sun_hours_tomorrow_h"]);
 
@@ -565,11 +569,21 @@ html <- paste0(
     for(const r of view){
       const tr = document.createElement("tr");
 
-      const topoLink = r.topo_url ? `<a href="${r.topo_url}" target="_blank" rel="noopener">Topo</a>` : "<span class=\\"muted\\">—</span>";
+      const topoLink = r.topo_url
+        ? `<a href="${r.topo_url}" target="_blank" rel="noopener">Topo</a>`
+        : dash;
+
       const plotUrl = r.plot_url || "";
+      const safeTitle = str(r.name).replace(/"/g, "&quot;");
+
       const plotBtn = plotUrl
-        ? `<button class="btn" data-plot="${plotUrl}" data-title="${str(r.name).replace(/\"/g, "&quot;")}">🔍 Vollbild</button>`
-        : `<span class="muted">—</span>`;
+        ? `<button class="btn" data-plot="${plotUrl}" data-title="${safeTitle}">🔍 Vollbild</button>`
+        : dash;
+
+      // IMPORTANT: do NOT nest template literals inside template literals
+      const plotLink = plotUrl
+        ? `<a class="muted small" href="${plotUrl}" target="_blank" rel="noopener">neu Tab</a>`
+        : "";
 
       tr.innerHTML = `
         <td>
@@ -578,24 +592,26 @@ html <- paste0(
             ${r.station_id ? ("Station: " + str(r.station_id) + (r.source ? (" (" + str(r.source) + ")") : "")) : ""}
           </div>
         </td>
-        <td>${str(r.difficulty) || "<span class=\\"muted\\">—</span>"}</td>
-        <td>${isFinite(num(r.elev_m)) ? Math.round(num(r.elev_m)) : "<span class=\\"muted\\">—</span>"}</td>
-        <td>${str(r.sun_tomorrow_range_txt) || "<span class=\"muted\">—</span>"}</td>
-        <td>${str(r.sun_duration_tomorrow_txt) || "<span class=\"muted\">—</span>"}</td>
-        <td>${r.thickness_tomorrow_07_txt || "<span class=\\"muted\\">—</span>"}</td>
-        <td>${r.climb_max_tomorrow_txt || "<span class=\\"muted\\">—</span>"}</td>
-        <td>${str(r.climb_max_time_local) || "<span class=\\"muted\\">—</span>"}</td>
-        <td>${plotBtn} ${plotUrl ? `<a class="muted small" href="${plotUrl}" target="_blank" rel="noopener">neu Tab</a>` : ""}</td>
+        <td>${str(r.difficulty) || dash}</td>
+        <td>${isFinite(num(r.elev_m)) ? Math.round(num(r.elev_m)) : dash}</td>
+        <td>${str(r.sun_tomorrow_range_txt) || dash}</td>
+        <td>${str(r.sun_duration_tomorrow_txt) || dash}</td>
+        <td>${r.thickness_tomorrow_07_txt || dash}</td>
+        <td>${r.climb_max_tomorrow_txt || dash}</td>
+        <td>${str(r.climb_max_time_local) || dash}</td>
+        <td>${plotBtn} ${plotLink}</td>
         <td>${topoLink}</td>
       `;
+
       tbody.appendChild(tr);
     }
 
-    Array.from(document.querySelectorAll("button[data-plot]")).forEach(btn => {
-      btn.addEventListener("click", () => {
-        openFullscreen(btn.getAttribute("data-plot"), btn.getAttribute("data-title"));
+    Array.from(document.querySelectorAll("button[data-plot]"))
+      .forEach(btn => {
+        btn.addEventListener("click", () => {
+          openFullscreen(btn.getAttribute("data-plot"), btn.getAttribute("data-title"));
+        });
       });
-    });
 
     status.textContent = `Einträge: ${view.length} / ${rows.length}  | Sort: ${sortKey} ${sortAsc ? "↑" : "↓"}`;
   }
@@ -612,13 +628,17 @@ html <- paste0(
   q.addEventListener("input", render);
 
   fetch("icefalls_table.json", {cache: "no-store"})
-    .then(r => r.json())
+    .then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status} ${r.statusText}`);
+      return r.json();
+    })
     .then(data => {
       rows = data || [];
       status.textContent = "Daten geladen.";
       render();
     })
     .catch(err => {
+      console.error(err);
       status.textContent = "Fehler beim Laden: " + err;
     });
 })();
