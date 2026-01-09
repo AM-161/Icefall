@@ -4,6 +4,19 @@ on:
   schedule:
     - cron: "0 16 * * *"   # 17:00 Europe/Vienna (CET) = 16:00 UTC
   workflow_dispatch:
+    inputs:
+      only_uid:
+        description: "Nur diese UID(s) rechnen, z.B. 276 oder 34,87,276"
+        required: false
+        default: ""
+      log_level:
+        description: "0-3 (mehr = mehr Logs)"
+        required: false
+        default: "2"
+      deploy:
+        description: "Pages deployen? true/false"
+        required: false
+        default: "true"
 
 permissions:
   contents: read
@@ -17,6 +30,11 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    env:
+      TZ: Europe/Vienna
+      ONLY_UID: ${{ github.event.inputs.only_uid || '' }}
+      LOG_LEVEL: ${{ github.event.inputs.log_level || '2' }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -27,6 +45,7 @@ jobs:
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
           cache: true
+          cache-version: 3
           packages: |
             any::httr
             any::httr2
@@ -45,20 +64,31 @@ jobs:
             any::raster
             any::ncdf4
 
-      - name: Build site
-        run: |
-          Rscript scripts/00_build_all_plots_oneprocess.R
-          Rscript scripts/01_build_map.R
-          Rscript scripts/02_build_list_page.R
+      - name: Build plots (ALL or ONLY_UID)
+        run: Rscript scripts/00_build_all_plots_oneprocess.R
 
-      - uses: actions/configure-pages@v5
+      # Map/List nur bauen, wenn du wirklich deployen willst ODER wenn es ein Scheduled Run ist
+      - name: Build map
+        if: ${{ github.event_name == 'schedule' || github.event.inputs.deploy == 'true' }}
+        run: Rscript scripts/01_build_map.R
 
-      - uses: actions/upload-pages-artifact@v3
+      - name: Build list page
+        if: ${{ github.event_name == 'schedule' || github.event.inputs.deploy == 'true' }}
+        run: Rscript scripts/02_build_list_page.R
+
+      - name: Configure Pages
+        if: ${{ github.event_name == 'schedule' || github.event.inputs.deploy == 'true' }}
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact (site/)
+        if: ${{ github.event_name == 'schedule' || github.event.inputs.deploy == 'true' }}
+        uses: actions/upload-pages-artifact@v3
         with:
           path: site
 
   deploy:
     needs: build
+    if: ${{ github.event_name == 'schedule' || github.event.inputs.deploy == 'true' }}
     runs-on: ubuntu-22.04
     environment:
       name: github-pages
