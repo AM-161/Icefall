@@ -5,7 +5,7 @@ on:
     - cron: "0 16 * * *"   # 17:00 Tirol im Winter (CET). Cron läuft in UTC.
   workflow_dispatch:
     inputs:
-      only_uid: 48
+      only_uid: "48"
         description: "Optional: single UID (e.g. 276) or comma list (e.g. 34,87,276)"
         required: false
         default: ""
