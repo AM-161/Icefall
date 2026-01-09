@@ -1,67 +1,49 @@
-name: Build & Deploy (plots + list + map)
+name: build-site
 
 on:
   schedule:
-    - cron: "0 16 * * *"   # 17:00 Europe/Vienna im Winter (UTC+1). Cron läuft in UTC.
+    - cron: "0 16 * * *"   # 17:00 Europe/Vienna (CET) = 16:00 UTC
   workflow_dispatch:
     inputs:
       only_uid:
-        description: "Optional: single UID (e.g. 276) or comma list (e.g. 34,87,276)"
+        description: "Nur diese UID(s) rechnen, z.B. 276 oder 34,87,276"
         required: false
         default: ""
       log_level:
-        description: "0..3 (default 1)"
+        description: "0-3"
         required: false
-        default: "1"
-
-permissions:
-  contents: read
-  pages: write
-  id-token: write
+        default: "2"
 
 concurrency:
-  group: pages
+  group: build-site-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-
+    runs-on: ubuntu-22.04
     env:
       TZ: Europe/Vienna
       ONLY_UID: ${{ github.event.inputs.only_uid }}
       LOG_LEVEL: ${{ github.event.inputs.log_level }}
-      N_WORKERS: "2"
-      INCA_KEY_DECIMALS: "3"
-      NWP_KEY_DECIMALS: "3"
-      CACHE_VERSION: "v1"
+
+      # optional, aber oft hilfreich für reproducible/binary installs
+      RSPM: https://packagemanager.posit.co/cran/__linux__/jammy/latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup R
-        uses: r-lib/actions/setup-r@v2
+      - uses: r-lib/actions/setup-r@v2
         with:
-          r-version: "4.3.3"
+          r-version: "release"
           use-public-rspm: true
 
-      - name: System dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libcurl4-openssl-dev libssl-dev libxml2-dev \
-            libgdal-dev libproj-dev libgeos-dev libudunits2-dev \
-            libnetcdf-dev netcdf-bin \
-            r-cran-png
-
-      - name: Install R packages (cached)
-        uses: r-lib/actions/setup-r-dependencies@v2
+      # WICHTIG: hier KEIN any::parallel!
+      - uses: r-lib/actions/setup-r-dependencies@v2
         with:
           cache: true
-          pak-version: "stable"
-          needs: check
-          extra-packages: |
+          cache-version: 3
+          packages: |
+            any::sessioninfo
             any::httr2
             any::jsonlite
             any::dplyr
@@ -72,44 +54,34 @@ jobs:
             any::zoo
             any::ggplot2
             any::patchwork
-            any::parallel
             any::leaflet
             any::htmlwidgets
             any::htmltools
             any::raster
             any::ncdf4
 
-      - name: Compute cache key (daily)
-        run: |
-          echo "CACHE_DAY=$(date -u +%Y-%m-%d)" >> $GITHUB_ENV
+      # Daten-Cache (Hinweis: GitHub Cache ist nicht "inkrementell aktualisierbar";
+      # am besten rotierender Key, sonst werden neue Downloads nicht persistiert.)
+      - name: Compute cache epoch (weekly)
+        id: epoch
+        run: echo "WEEK=$(date -u +%G-%V)" >> $GITHUB_OUTPUT
 
-      - name: Restore data caches
+      - name: Restore data cache
         uses: actions/cache@v4
         with:
           path: |
-            data/_cache_geosphere
-            data/inca_nordtirol
-            data/nwp_2500m_forecast
-          key: geosphere-${{ runner.os }}-${{ env.CACHE_VERSION }}-${{ env.CACHE_DAY }}
+            data/_cache_geosphere/
+            data/inca_nordtirol/
+            data/nwp_2500m_forecast/
+          key: geosphere-data-${{ runner.os }}-${{ steps.epoch.outputs.WEEK }}
           restore-keys: |
-            geosphere-${{ runner.os }}-${{ env.CACHE_VERSION }}-
+            geosphere-data-${{ runner.os }}-
 
-      - name: Build plots + modelruns
+      - name: Build plots (all uids or ONLY_UID)
         run: Rscript scripts/00_build_all_plots_oneprocess.R
-
-      - name: Build list page
-        run: Rscript scripts/02_build_list_page.R
 
       - name: Build map
         run: Rscript scripts/01_build_map.R
 
-      - name: Configure Pages
-        uses: actions/configure-pages@v5
-
-      - name: Upload site artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: site
-
-      - name: Deploy to GitHub Pages
-        uses: actions/deploy-pages@v4
+      - name: Build list page
+        run: Rscript scripts/02_build_list_page.R
