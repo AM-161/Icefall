@@ -1,51 +1,35 @@
-name: build-site
+name: build-and-deploy
 
 on:
   schedule:
     - cron: "0 16 * * *"   # 17:00 Europe/Vienna (CET) = 16:00 UTC
   workflow_dispatch:
-    inputs:
-      only_uid:
-        description: "Nur diese UID(s) rechnen, z.B. 276 oder 34,87,276"
-        required: false
-        default: ""
-      log_level:
-        description: "0-3"
-        required: false
-        default: "2"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
 
 concurrency:
-  group: build-site-${{ github.ref }}
+  group: pages-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    env:
-      TZ: Europe/Vienna
-      ONLY_UID: ${{ github.event.inputs.only_uid }}
-      LOG_LEVEL: ${{ github.event.inputs.log_level }}
-
-      # optional, aber oft hilfreich für reproducible/binary installs
-      RSPM: https://packagemanager.posit.co/cran/__linux__/jammy/latest
-
     steps:
       - uses: actions/checkout@v4
 
       - uses: r-lib/actions/setup-r@v2
         with:
-          r-version: "release"
           use-public-rspm: true
 
-      # WICHTIG: hier KEIN any::parallel!
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
           cache: true
-          cache-version: 3
           packages: |
-            any::sessioninfo
-            any::httr2
             any::httr
+            any::httr2
             any::jsonlite
             any::dplyr
             any::tidyr
@@ -61,28 +45,22 @@ jobs:
             any::raster
             any::ncdf4
 
-      # Daten-Cache (Hinweis: GitHub Cache ist nicht "inkrementell aktualisierbar";
-      # am besten rotierender Key, sonst werden neue Downloads nicht persistiert.)
-      - name: Compute cache epoch (weekly)
-        id: epoch
-        run: echo "WEEK=$(date -u +%G-%V)" >> $GITHUB_OUTPUT
+      - name: Build site
+        run: |
+          Rscript scripts/00_build_all_plots_oneprocess.R
+          Rscript scripts/01_build_map.R
+          Rscript scripts/02_build_list_page.R
 
-      - name: Restore data cache
-        uses: actions/cache@v4
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
         with:
-          path: |
-            data/_cache_geosphere/
-            data/inca_nordtirol/
-            data/nwp_2500m_forecast/
-          key: geosphere-data-${{ runner.os }}-${{ steps.epoch.outputs.WEEK }}
-          restore-keys: |
-            geosphere-data-${{ runner.os }}-
+          path: site
 
-      - name: Build plots (all uids or ONLY_UID)
-        run: Rscript scripts/00_build_all_plots_oneprocess.R
-
-      - name: Build map
-        run: Rscript scripts/01_build_map.R
-
-      - name: Build list page
-        run: Rscript scripts/02_build_list_page.R
+  deploy:
+    needs: build
+    runs-on: ubuntu-22.04
+    environment:
+      name: github-pages
+    steps:
+      - uses: actions/deploy-pages@v4
