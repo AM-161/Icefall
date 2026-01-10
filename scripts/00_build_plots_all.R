@@ -57,8 +57,7 @@ log_msg <- function(level = 1, ...) {
 }
 log_header <- function(title, level = 1) {
   if (LOG_LEVEL >= level) {
-    message("
-==============================")
+    message("\n==============================")
     message(title)
     message('==============================')
   }
@@ -101,42 +100,6 @@ for (d in c(DIR_CACHE, DIR_STATION, PATH_INCA_DIR, PATH_NWP_DIR, DIR_MODEL, DIR_
 # ----------------------------
 # Helpers
 # ----------------------------
-fill_locf <- function(x) {
-  # robust: immer auf numeric ziehen; falls es trotzdem knallt -> NA zurück
-  x <- to_num(x)
-  tryCatch({
-    x <- zoo::na.locf(x, na.rm = FALSE)
-    x <- zoo::na.locf(x, na.rm = FALSE, fromLast = TRUE)
-    x
-  }, error = function(e) {
-    rep(NA_real_, length(x))
-  })
-}
-
-is_finite_time <- function(x) is.finite(as.numeric(x))
-
-safe_seq_posix <- function(from, to, by, context = "") {
-  if (!is_finite_time(from) || !is_finite_time(to)) {
-    stop(sprintf(
-      "SEQ FAIL [%s]: from=%s (class=%s) | to=%s (class=%s)",
-      context, as.character(from), paste(class(from), collapse="/"),
-      as.character(to),   paste(class(to), collapse="/")
-    ))
-  }
-  seq(from, to, by = by)
-}
-
-safe_seq_date <- function(from, to, by, context = "") {
-  from <- as.Date(from); to <- as.Date(to)
-  if (is.na(from) || is.na(to)) {
-    stop(sprintf("SEQ FAIL [%s]: from=%s | to=%s", context, as.character(from), as.character(to)))
-  }
-  seq(from, to, by = by)
-}
-
-
-is_finite_posix <- function(x) is.finite(as.numeric(x))
-
 season_start_oct <- function(d) {
   d <- as.Date(d)
   y <- year(d); m <- month(d)
@@ -155,6 +118,18 @@ to_num <- function(x) {
   suppressWarnings(as.numeric(x))
 }
 
+is_finite_posix <- function(x) is.finite(as.numeric(x))
+
+# Robust join wrapper: silence expected many-to-many warnings on dedup expansion
+left_join_mm <- function(x, y, by, ...) {
+  # relationship arg exists in dplyr >= 1.1.0
+  if (tryCatch(utils::packageVersion('dplyr') >= '1.1.0', error = function(e) FALSE)) {
+    dplyr::left_join(x, y, by = by, relationship = 'many-to-many', ...)
+  } else {
+    dplyr::left_join(x, y, by = by, ...)
+  }
+}
+
 bin5 <- function(dd_deg) {
   ifelse(is.na(dd_deg), NA_real_, (round(dd_deg / 5) * 5) %% 360)
 }
@@ -164,6 +139,18 @@ fill1 <- function(x) {
   x <- zoo::na.locf(x, na.rm = FALSE)
   x <- zoo::na.locf(x, na.rm = FALSE, fromLast = TRUE)
   x
+}
+
+fill_locf <- function(x) {
+  x <- to_num(x)
+  x <- zoo::na.locf(x, na.rm = FALSE)
+  x <- zoo::na.locf(x, na.rm = FALSE, fromLast = TRUE)
+  x
+}
+
+ensure_cols_num <- function(df, cols) {
+  for (cc in cols) if (!cc %in% names(df)) df[[cc]] <- NA_real_
+  df %>% mutate(across(all_of(cols), to_num))
 }
 
 read_geosphere_csv <- function(path) {
@@ -189,7 +176,7 @@ parse_time_any_utc <- function(x) {
   t <- suppressWarnings(lubridate::ymd_hms(x, tz = 'UTC'))
   if (all(is.na(t))) t <- suppressWarnings(lubridate::ymd_hm(x, tz = 'UTC'))
   if (all(is.na(t))) t <- suppressWarnings(lubridate::parse_date_time(
-    x, orders = c('Ymd HMS', 'Ymd HM', 'Y-m-d"T"H:M:S', 'Y-m-d"T"H:M'), tz = 'UTC'
+    x, orders = c('Ymd HMS', 'Ymd HM', 'Y-m-d"T"H:M:S', 'Y-m-d"T"H:M', 'Y-m-d"T"H:M:SOS'), tz = 'UTC'
   ))
   t
 }
@@ -227,10 +214,7 @@ stopifnot(file.exists(PATH_ASSIGN), file.exists(PATH_STATIONS), file.exists(PATH
 assign <- readr::read_csv(PATH_ASSIGN, show_col_types = FALSE, progress = FALSE)
 if (!('uid' %in% names(assign))) stop('Spalte uid fehlt in ', PATH_ASSIGN)
 
-# keep only needed cols (but tolerate extra)
-need_cols <- c('uid','station_id','source','dist_km','elev_diff_m','ice_lon','ice_lat','name','ice_name','icefall_name','icefall_elev_m','icefall_height_m')
-# do not drop columns aggressively because your file sometimes changes; just ensure required exist
-
+# coerce key cols
 assign <- assign %>%
   mutate(
     uid = suppressWarnings(as.integer(uid)),
@@ -335,43 +319,57 @@ read_lwd_param <- function(station_code, param, season) {
   txt0 <- tryCatch(rawToChar(raw), error = function(e) NA_character_)
   if (is.na(txt0)) return(NULL)
   txt <- iconv(txt0, from = '', to = 'UTF-8', sub = 'byte')
-  
+
   tmp <- tryCatch(readr::read_delim(file = I(txt), delim = ';', show_col_types = FALSE, progress = FALSE), error = function(e) NULL)
   if (is.null(tmp) || nrow(tmp) == 0) return(NULL)
-  
+
   nms <- names(tmp)
   nms_low <- tolower(iconv(nms, from = '', to = 'ASCII//TRANSLIT', sub = ''))
   dt_i <- which(grepl('datetime|date_time|zeitstempel|timestamp|datumzeit|datum_zeit', nms_low))
   dt_col <- if (length(dt_i)) nms[dt_i[1]] else NA_character_
-  
+
   if (!is.na(dt_col)) {
     t <- parse_dt_any(tmp[[dt_col]], tz = TZ_LOCAL)
-    val_col <- setdiff(nms, dt_col)[1]
+
+    cand <- setdiff(nms, dt_col)
+    if (!length(cand)) return(NULL)
+
+    # Robust: choose the column with the most finite numeric values
+    scores <- vapply(cand, function(cc) sum(is.finite(to_num(tmp[[cc]]))), integer(1))
+    val_col <- cand[which.max(scores)]
+
+    if (!is.finite(max(scores)) || max(scores) == 0) return(NULL)
+
     return(tibble(timestamp = t, value = to_num(tmp[[val_col]])) %>% filter(!is.na(timestamp)))
   }
-  
+
   if (ncol(tmp) >= 2) {
     t <- parse_dt_any(tmp[[1]], tz = TZ_LOCAL)
-    return(tibble(timestamp = t, value = to_num(tmp[[2]])) %>% filter(!is.na(timestamp)))
+
+    cand <- names(tmp)[-1]
+    scores <- vapply(cand, function(cc) sum(is.finite(to_num(tmp[[cc]]))), integer(1))
+    val_col <- cand[which.max(scores)]
+
+    if (!is.finite(max(scores)) || max(scores) == 0) return(NULL)
+
+    return(tibble(timestamp = t, value = to_num(tmp[[val_col]])) %>% filter(!is.na(timestamp)))
   }
   NULL
 }
 
 get_lwd_station_tlrf <- function(start_date, end_date, station_code) {
-  seasons <- unique(season_label(
-    safe_seq_date(as.Date(start_date), as.Date(end_date), by = "day", context = "LWD seasons")
-  ))
+  seasons <- unique(season_label(seq(as.Date(start_date), as.Date(end_date), by = 'day')))
   tl <- bind_rows(lapply(seasons, function(seas) read_lwd_param(station_code, 'LT', seas))) %>% mutate(param = 'TL')
   rf <- bind_rows(lapply(seasons, function(seas) read_lwd_param(station_code, 'LF', seas))) %>% mutate(param = 'RF')
   long <- bind_rows(tl, rf)
   if (nrow(long) == 0) stop('Keine LWD Daten für Station ', station_code)
-  
+
   wide <- long %>%
     select(timestamp, param, value) %>%
     pivot_wider(names_from = param, values_from = value) %>%
     arrange(timestamp) %>%
     filter(timestamp >= as.POSIXct(start_date, tz = TZ_LOCAL), timestamp < as.POSIXct(end_date + 1, tz = TZ_LOCAL))
-  
+
   for (cc in c('TL','RF')) if (!cc %in% names(wide)) wide[[cc]] <- NA_real_
   wide
 }
@@ -380,38 +378,29 @@ get_geosphere_station_tlrf <- function(start_date, end_date, station_id) {
   base_url <- 'https://dataset.api.hub.geosphere.at/v1/station/historical/klima-v2-10min'
   start_q <- sprintf('%sT00:00', as.character(as.Date(start_date)))
   end_q   <- sprintf('%sT23:50', as.character(as.Date(end_date)))
-  
+
   param_tries <- c('tl,rf', 'TL,RF')
   last_msg <- NULL
-  
+
   for (p in param_tries) {
     if (LOG_LEVEL >= 3) log_msg(3, 'Station request: station_ids=', station_id, ' | params=', p, ' | start=', start_q, ' | end=', end_q)
-    
+
     resp <- request(base_url) |>
       req_url_query(station_ids = as.character(station_id), parameters = p, start = start_q, end = end_q) |>
       req_user_agent('icefall-model/1.0 (R httr2)') |>
       req_retry(max_tries = 3) |>
       req_error(is_error = function(r) FALSE) |>
       req_perform()
-    
+
     st <- resp_status(resp)
     if (st < 400) {
       dat <- jsonlite::fromJSON(resp_body_string(resp), simplifyVector = FALSE)
-      ts_raw <- dat[["timestamps"]]
+      ts_raw <- dat[['timestamps']]
       time_utc <- parse_time_any_utc(ts_raw)
-      if (all(is.na(time_utc))) {
-        ts_fix <- ts_raw
-        has_colon_tz <- grepl('([+-][0-9]{2}):([0-9]{2})$', ts_fix)
-        ts_fix[has_colon_tz] <- paste0(
-          substr(ts_fix[has_colon_tz], 1, nchar(ts_fix[has_colon_tz]) - 3),
-          substr(ts_fix[has_colon_tz], nchar(ts_fix[has_colon_tz]) - 1, nchar(ts_fix[has_colon_tz]))
-        )
-        time_utc <- as.POSIXct(strptime(ts_fix, '%Y-%m-%dT%H:%M%z', tz = 'UTC'))
-      }
-      
+
       feat   <- dat[['features']][[1]]
       params <- feat[['properties']][['parameters']]
-      
+
       pull_anycase <- function(name) {
         cand <- c(name, tolower(name), toupper(name))
         for (nm in cand) {
@@ -426,17 +415,17 @@ get_geosphere_station_tlrf <- function(start_date, end_date, station_id) {
         }
         rep(NA_real_, length(time_utc))
       }
-      
+
       return(tibble(
         timestamp = with_tz(time_utc, TZ_LOCAL),
         TL = pull_anycase('tl'),
         RF = pull_anycase('rf')
       ))
     }
-    
+
     last_msg <- tryCatch(resp_body_string(resp), error = function(e) '')
   }
-  
+
   stop('GeoSphere klima-v2-10min request failed. HTTP ', resp_status(resp), '. Response: ', last_msg)
 }
 
@@ -448,50 +437,39 @@ get_station_tlrf <- function(start_date, end_date, station_id, source) {
 
 station_cache_file <- function(start_date, end_date, station_id, source) {
   seas <- season_label(as.Date(end_date))
-  f <- file.path(DIR_STATION, sprintf('station_%s_%s_%s.rds', source, station_id, seas))
-  f
+  file.path(DIR_STATION, sprintf('station_%s_%s_%s.rds', source, station_id, seas))
 }
 
-is_finite_posix <- function(x) is.finite(as.numeric(x))
-
+# Cache read with validation: avoids silent "empty/invalid" station caches
 get_station_tlrf_cached <- function(start_date, end_date, station_id, source, verbose = TRUE) {
   f <- station_cache_file(start_date, end_date, station_id, source)
-  
-  # --- Cache lesen + VALIDIEREN ---
+
   if (file.exists(f) && file.info(f)$size > 0) {
     dat <- tryCatch(readRDS(f), error = function(e) NULL)
-    
-    ok <- !is.null(dat) &&
-      is.data.frame(dat) &&
-      "timestamp" %in% names(dat)
-    
+    ok <- !is.null(dat) && is.data.frame(dat) && 'timestamp' %in% names(dat)
     if (ok) {
-      # robustes Parsing (auch wenn timestamp als character/factor drinliegt)
       dat$timestamp <- parse_dt_any(dat$timestamp, tz = TZ_LOCAL)
       ok <- any(is_finite_posix(dat$timestamp))
     }
-    
     if (ok) {
-      if (verbose) message("Station ", station_id, " (", source, "): cache hit")
-      log_msg(2, "Station cache file -> ", f)
+      if (verbose) message('Station ', station_id, ' (', source, '): cache hit')
+      log_msg(2, 'Station cache file -> ', f)
       return(dat)
-    } else {
-      message("Station ", station_id, " (", source, "): cache INVALID -> rebuild: ", f)
-      try(file.remove(f), silent = TRUE)
     }
+    message('Station ', station_id, ' (', source, '): cache INVALID -> rebuild: ', f)
+    try(file.remove(f), silent = TRUE)
   }
-  
-  # --- Neu bauen ---
-  if (verbose) message("Station ", station_id, " (", source, "): cache miss (initial)")
-  log_msg(2, "Station cache file -> ", f)
-  
+
+  if (verbose) message('Station ', station_id, ' (', source, '): cache miss (initial)')
+  log_msg(2, 'Station cache file -> ', f)
+
   dat <- get_station_tlrf(start_date, end_date, station_id, source)
   dat$timestamp <- parse_dt_any(dat$timestamp, tz = TZ_LOCAL)
-  
+
   if (!any(is_finite_posix(dat$timestamp))) {
-    stop("Station ", station_id, " (", source, "): keine gültigen Timestamps nach Parsing (Download/Formatproblem).")
+    stop('Station ', station_id, ' (', source, '): keine gültigen Timestamps nach Parsing (Download/Formatproblem).')
   }
-  
+
   saveRDS(dat, f)
   dat
 }
@@ -504,22 +482,22 @@ parse_inca_timeseries_csv_file <- function(path) {
   if (is.null(df) || nrow(df) == 0) {
     return(tibble(time = as.POSIXct(character(), tz = TZ_LOCAL), UU = numeric(), VV = numeric(), GL = numeric()))
   }
-  
+
   nms <- names(df)
   nms_low <- tolower(nms)
   time_idx <- which(grepl('time|timestamp|date', nms_low))[1]
   if (is.na(time_idx)) stop('INCA CSV: keine Zeitspalte in ', basename(path))
   time_col <- nms[time_idx]
-  
+
   pick <- function(target) {
     i <- which(nms_low == tolower(target)); if (length(i)) return(nms[i[1]])
     i <- which(grepl(paste0('^', tolower(target), '($|[^a-z0-9])'), nms_low)); if (length(i)) return(nms[i[1]])
     i <- which(grepl(tolower(target), nms_low)); if (length(i)) return(nms[i[1]])
     NA_character_
   }
-  
+
   cUU <- pick('UU'); cVV <- pick('VV'); cGL <- pick('GL')
-  
+
   tibble(
     time_utc = parse_time_any_utc(df[[time_col]]),
     UU = if (!is.na(cUU)) suppressWarnings(as.numeric(df[[cUU]])) else NA_real_,
@@ -534,18 +512,18 @@ parse_inca_timeseries_csv_file <- function(path) {
 download_inca_point_key_ts <- function(inca_key, lat, lon, start_date, end_date, base_dir = PATH_INCA_DIR, verbose = TRUE) {
   out_dir <- file.path(base_dir, paste0('key_', inca_key))
   safe_mkdir(out_dir)
-  
+
   cs <- as.Date(start_date); ce <- as.Date(end_date)
   outfile <- file.path(out_dir, sprintf('inca_%s_%s_%s.csv', inca_key, format(cs, '%Y%m%d'), format(ce, '%Y%m%d')))
   if (file.exists(outfile) && file.info(outfile)$size > 0) return(outfile)
-  
+
   base_url <- 'https://dataset.api.hub.geosphere.at/v1/timeseries/historical/inca-v1-1h-1km'
   start_time <- sprintf('%sT00:00', format(cs, '%Y-%m-%d'))
   end_time   <- sprintf('%sT23:00', format(ce, '%Y-%m-%d'))
-  
+
   if (verbose) message('INCA ', inca_key, ': download ', cs, '..', ce)
   if (LOG_LEVEL >= 3) log_msg(3, 'INCA request: lat_lon=', paste0(lat, ',', lon), ' | start=', start_time, ' | end=', end_time)
-  
+
   resp <- request(base_url) |>
     req_retry(max_tries = 5) |>
     req_error(is_error = function(resp) FALSE) |>
@@ -558,12 +536,12 @@ download_inca_point_key_ts <- function(inca_key, lat, lon, start_date, end_date,
     ) |>
     req_user_agent('icefall-model/1.0 (R httr2)') |>
     req_perform()
-  
+
   if (resp_status(resp) >= 400) {
     msg <- tryCatch(resp_body_string(resp), error = function(e) '')
     stop('INCA download failed (HTTP ', resp_status(resp), '). ', msg)
   }
-  
+
   writeLines(resp_body_string(resp), outfile, useBytes = TRUE)
   Sys.sleep(0.2)
   outfile
@@ -571,11 +549,16 @@ download_inca_point_key_ts <- function(inca_key, lat, lon, start_date, end_date,
 
 get_inca_point_hourly_key <- function(inca_key, start_date, end_date, lon, lat, path_dir = PATH_INCA_DIR, verbose = TRUE) {
   f <- download_inca_point_key_ts(inca_key, lat, lon, start_date, end_date, base_dir = path_dir, verbose = verbose)
-  
+
   parse_inca_timeseries_csv_file(f) %>%
     arrange(time) %>%
     group_by(time) %>%
-    summarise(UU = mean(UU, na.rm = TRUE), VV = mean(VV, na.rm = TRUE), GL = mean(GL, na.rm = TRUE), .groups = 'drop') %>%
+    summarise(
+      UU = mean(UU, na.rm = TRUE),
+      VV = mean(VV, na.rm = TRUE),
+      GL = mean(GL, na.rm = TRUE),
+      .groups = 'drop'
+    ) %>%
     mutate(
       FF_inca = sqrt(UU^2 + VV^2),
       DD_inca = (atan2(UU, VV) * 180/pi + 180) %% 360,
@@ -604,16 +587,15 @@ grad_to_glow_wm2_vec <- function(grad_ws_m2) {
 get_nwp_metadata_cached <- function(base_dir = PATH_NWP_DIR, max_age_min = 20) {
   safe_mkdir(base_dir)
   cache <- file.path(base_dir, 'nwp_metadata_cache.json')
-  
+
   if (file.exists(cache)) {
     age_min <- as.numeric(difftime(Sys.time(), file.info(cache)$mtime, units = 'mins'))
     if (is.finite(age_min) && age_min <= max_age_min) {
-      txt <- paste(readLines(cache, warn = FALSE), collapse = "
-")
+      txt <- paste(readLines(cache, warn = FALSE), collapse = "\n")
       return(jsonlite::fromJSON(txt, simplifyVector = TRUE))
     }
   }
-  
+
   meta_url <- 'https://dataset.api.hub.geosphere.at/v1/timeseries/forecast/nwp-v1-1h-2500m/metadata'
   resp <- request(meta_url) |> req_user_agent('icefall-model/1.0 (R httr2)') |> req_perform()
   txt <- resp_body_string(resp)
@@ -624,20 +606,20 @@ get_nwp_metadata_cached <- function(base_dir = PATH_NWP_DIR, max_age_min = 20) {
 parse_nwp_timeseries_csv_file <- function(path) {
   df <- read_geosphere_csv(path)
   if (is.null(df) || nrow(df) == 0) return(tibble(time = as.POSIXct(character(), tz = TZ_LOCAL)))
-  
+
   nms <- names(df)
   nms_low <- tolower(nms)
   time_idx <- which(grepl('time|timestamp|date', nms_low))[1]
   if (is.na(time_idx)) stop('NWP CSV: keine Zeitspalte in ', basename(path))
   time_col <- nms[time_idx]
-  
+
   pick <- function(target) {
     i <- which(nms_low == tolower(target)); if (length(i)) return(nms[i[1]])
     i <- which(grepl(paste0('^', tolower(target), '($|[^a-z0-9])'), nms_low)); if (length(i)) return(nms[i[1]])
     i <- which(grepl(tolower(target), nms_low)); if (length(i)) return(nms[i[1]])
     NA_character_
   }
-  
+
   cols <- list(
     t2m  = pick('t2m'),
     rh2m = pick('rh2m'),
@@ -645,13 +627,13 @@ parse_nwp_timeseries_csv_file <- function(path) {
     v10m = pick('v10m'),
     grad = pick('grad')
   )
-  
+
   out <- tibble(time_utc = parse_time_any_utc(df[[time_col]]))
   for (nm in names(cols)) {
     cc <- cols[[nm]]
     out[[nm]] <- if (!is.na(cc)) suppressWarnings(as.numeric(df[[cc]])) else NA_real_
   }
-  
+
   out %>%
     filter(!is.na(time_utc)) %>%
     mutate(time = with_tz(time_utc, TZ_LOCAL)) %>%
@@ -662,14 +644,14 @@ download_nwp_point_key_fc <- function(nwp_key, lat, lon, start_time_local, end_t
   safe_mkdir(base_dir)
   out_dir <- file.path(base_dir, paste0('key_', nwp_key))
   safe_mkdir(out_dir)
-  
+
   meta <- get_nwp_metadata_cached(base_dir = base_dir)
   last_ref <- meta[['last_forecast_reftime']]
   ref_tag <- gsub('[^0-9T-]', '', gsub('[:+]', '', last_ref))
-  
+
   start_utc <- with_tz(as.POSIXct(start_time_local, tz = TZ_LOCAL), 'UTC')
   end_utc   <- with_tz(as.POSIXct(end_time_local,   tz = TZ_LOCAL), 'UTC')
-  
+
   outfile <- file.path(
     out_dir,
     sprintf('nwp_%s_ref%s_%s_%s.csv',
@@ -678,16 +660,16 @@ download_nwp_point_key_fc <- function(nwp_key, lat, lon, start_time_local, end_t
             format(end_utc,   '%Y%m%d%H%M')
     )
   )
-  
+
   if (file.exists(outfile) && file.info(outfile)$size > 0) return(outfile)
-  
+
   base_url <- 'https://dataset.api.hub.geosphere.at/v1/timeseries/forecast/nwp-v1-1h-2500m'
   start_q <- format(start_utc, '%Y-%m-%dT%H:%M')
   end_q   <- format(end_utc,   '%Y-%m-%dT%H:%M')
-  
+
   if (verbose) message('NWP ', nwp_key, ': download ', start_q, ' .. ', end_q)
   if (LOG_LEVEL >= 3) log_msg(3, 'NWP request: lat_lon=', paste0(lat, ',', lon), ' | start=', start_q, ' | end=', end_q, ' | off=', forecast_offset)
-  
+
   resp <- request(base_url) |>
     req_retry(max_tries = 5) |>
     req_error(is_error = function(r) FALSE) |>
@@ -701,12 +683,12 @@ download_nwp_point_key_fc <- function(nwp_key, lat, lon, start_time_local, end_t
     ) |>
     req_user_agent('icefall-model/1.0 (R httr2)') |>
     req_perform()
-  
+
   if (resp_status(resp) >= 400) {
     msg <- tryCatch(resp_body_string(resp), error = function(e) '')
     stop('NWP download failed (HTTP ', resp_status(resp), '). ', msg)
   }
-  
+
   writeLines(resp_body_string(resp), outfile, useBytes = TRUE)
   Sys.sleep(0.2)
   outfile
@@ -714,17 +696,17 @@ download_nwp_point_key_fc <- function(nwp_key, lat, lon, start_time_local, end_t
 
 get_nwp_point_forecast_hourly_key <- function(nwp_key, start_time_local, end_time_local, lon, lat, base_dir = PATH_NWP_DIR, forecast_offset = 0, verbose = TRUE) {
   f <- download_nwp_point_key_fc(nwp_key, lat, lon, start_time_local, end_time_local, forecast_offset = forecast_offset, base_dir = base_dir, verbose = verbose)
-  
+
   hr <- parse_nwp_timeseries_csv_file(f) %>%
     arrange(time) %>%
     distinct(time, .keep_all = TRUE)
-  
+
   if (nrow(hr) == 0) {
     return(tibble(nwp_key = nwp_key, time = as.POSIXct(character(), tz = TZ_LOCAL), TL = numeric(), RF = numeric(), FF = numeric(), DD = numeric(), GLOW = numeric()))
   }
-  
+
   glow <- grad_to_glow_wm2_vec(hr$grad)
-  
+
   tibble(
     nwp_key = nwp_key,
     time = hr$time,
@@ -750,7 +732,7 @@ if (nrow(station_blocks) > 0) {
     src <- as.character(station_blocks$source[i])
     log_header(paste0('⛅ Station-Block: ', s, ' (', src, ') | uids=', station_blocks$n_uids[i]), level = 1)
     try(get_station_tlrf_cached(START_DATE, END_DATE, s, src, verbose = TRUE), silent = TRUE)
-    
+
     if (LOG_LEVEL >= 2) {
       u_preview <- assign_run %>% filter(.data$station_id == s, .data$source == src) %>% pull(.data$uid) %>% unique()
       u_preview <- head(sort(u_preview), 12)
@@ -783,36 +765,40 @@ inca_by_key <- if (file.exists(inca_points_rds) && file.info(inca_points_rds)$si
   readRDS(inca_points_rds)
 } else {
   message('INCA points(by key): cache miss (build) -> ', inca_points_rds)
-  
+
   worker_fun <- function(i) {
     k <- inca_jobs$inca_key[i]
     lat <- inca_jobs$ice_lat[i]
     lon <- inca_jobs$ice_lon[i]
     get_inca_point_hourly_key(k, START_DATE, END_DATE, lon = lon, lat = lat, path_dir = PATH_INCA_DIR, verbose = (LOG_LEVEL >= 3))
   }
-  
+
   idx <- seq_len(nrow(inca_jobs))
   out_list <- if (.Platform$OS.type == 'unix' && N_WORKERS > 1) {
     parallel::mclapply(idx, worker_fun, mc.cores = N_WORKERS)
   } else {
     lapply(idx, worker_fun)
   }
-  
-  out <- bind_rows(out_list) %>% arrange(inca_key, time)
+
+  out <- bind_rows(out_list) %>%
+    arrange(inca_key, time) %>%
+    distinct(inca_key, time, .keep_all = TRUE)
+
   saveRDS(out, inca_points_rds)
   out
 }
 
+# EXPAND key-timeseries to per-uid timeseries
+# (This is an expected many-to-many: many uids share a key, and each key has many time rows.)
 inca_all <- uid2inca %>%
   select(uid, inca_key) %>%
-  left_join(inca_by_key, by = 'inca_key') %>%
+  left_join_mm(inca_by_key, by = 'inca_key') %>%
   select(uid, time, FF_inca, DD_inca, GLOW_inca) %>%
   arrange(uid, time)
 
-# ---- SPEED: pre-index hourly tables by uid (avoid per-uid full scans) ----
+# pre-index hourly tables by uid (avoid per-uid full scans)
 inca_by_uid <- split(inca_all, inca_all$uid)
 rm(inca_all); gc()
-
 
 # =====================================================================
 # Build ALL NWP forecast points (hourly) by key -> then expand to uid
@@ -832,43 +818,111 @@ if (LOG_LEVEL >= 2) {
 
 nwp_jobs <- uid2nwp %>% distinct(nwp_key, ice_lat, ice_lon) %>% arrange(nwp_key)
 
-pick_latest_nwp_points_rds <- function(decimals = NWP_KEY_DECIMALS) {
-  pat <- sprintf("^nwp_points_bykey_.*_d%d\\.rds$", decimals)
-  files <- list.files(DIR_CACHE, pattern = pat, full.names = TRUE)
-  if (!length(files)) return(NA_character_)
-  files[which.max(file.info(files)$mtime)]
-}
+# Build fresh NWP-by-key for the current forecast window (small) and cache it.
+meta <- get_nwp_metadata_cached(base_dir = PATH_NWP_DIR)
+ref_tag <- gsub('[^0-9T-]', '', gsub('[:+]', '', meta[['last_forecast_reftime']]))
 
-nwp_points_rds <- pick_latest_nwp_points_rds()
-if (is.na(nwp_points_rds)) {
-  stop("❌ Kein NWP point cache gefunden. Erst scripts/01_build_map.R laufen lassen (inkl. grad + Cache-Export).")
-}
+nwp_points_rds <- file.path(DIR_CACHE, sprintf('nwp_points_bykey_ref%s_%s_%s_d%d.rds', ref_tag, format(HIST_END_LOCAL, '%Y%m%d%H%M'), format(FC_END_LOCAL, '%Y%m%d%H%M'), NWP_KEY_DECIMALS))
 
-message("NWP points(by key): cache hit -> ", nwp_points_rds)
-nwp_by_key <- readRDS(nwp_points_rds)
+nwp_by_key <- if (file.exists(nwp_points_rds) && file.info(nwp_points_rds)$size > 0) {
+  message('NWP points(by key): cache hit -> ', nwp_points_rds)
+  readRDS(nwp_points_rds)
+} else {
+  message('NWP points(by key): cache miss (build) -> ', nwp_points_rds)
 
   worker_fun <- function(i) {
     k <- nwp_jobs$nwp_key[i]
     lat <- nwp_jobs$ice_lat[i]
     lon <- nwp_jobs$ice_lon[i]
-    get_nwp_point_forecast_hourly_key(k, HIST_END_LOCAL, FC_END_LOCAL, lon = lon, lat = lat, base_dir = PATH_NWP_DIR, verbose = (LOG_LEVEL >= 3))
+
+    tryCatch({
+      res <- get_nwp_point_forecast_hourly_key(
+        k,
+        HIST_END_LOCAL,
+        FC_END_LOCAL,
+        lon = lon,
+        lat = lat,
+        base_dir = PATH_NWP_DIR,
+        verbose = (LOG_LEVEL >= 3)
+      )
+      res$.error_msg <- NA_character_
+      res
+    }, error = function(e) {
+      tibble(
+        nwp_key = as.character(k),
+        time = as.POSIXct(NA, tz = TZ_LOCAL),
+        TL = NA_real_, RF = NA_real_, FF = NA_real_, DD = NA_real_, GLOW = NA_real_,
+        .error_msg = paste0('lat=', lat, ' lon=', lon, ' | ', conditionMessage(e))
+      )
+    })
   }
-  
+
   idx <- seq_len(nrow(nwp_jobs))
+
   out_list <- if (.Platform$OS.type == 'unix' && N_WORKERS > 1) {
     parallel::mclapply(idx, worker_fun, mc.cores = N_WORKERS)
   } else {
     lapply(idx, worker_fun)
   }
-  
-  out <- bind_rows(out_list) %>% arrange(nwp_key, time)
+
+  # mclapply may return "try-error" objects if worker errors escape;
+  # ensure we always bind only data.frames, and surface the real error messages.
+  out_list <- lapply(out_list, function(x) {
+    if (is.null(x)) return(NULL)
+    if (inherits(x, 'try-error')) {
+      return(tibble(
+        nwp_key = NA_character_,
+        time = as.POSIXct(NA, tz = TZ_LOCAL),
+        TL = NA_real_, RF = NA_real_, FF = NA_real_, DD = NA_real_, GLOW = NA_real_,
+        .error_msg = as.character(x)
+      ))
+    }
+    if (!is.data.frame(x)) {
+      return(tibble(
+        nwp_key = NA_character_,
+        time = as.POSIXct(NA, tz = TZ_LOCAL),
+        TL = NA_real_, RF = NA_real_, FF = NA_real_, DD = NA_real_, GLOW = NA_real_,
+        .error_msg = paste0('Worker returned non-data.frame: ', paste(class(x), collapse = '/'))
+      ))
+    }
+    x
+  })
+
+  out <- bind_rows(out_list)
+
+  # If any downloads failed, stop with a readable summary (and keep a CSV for debugging).
+  if ('.error_msg' %in% names(out)) {
+    err <- out %>%
+      filter(!is.na(.error_msg)) %>%
+      distinct(nwp_key, .error_msg)
+
+    if (nrow(err) > 0) {
+      err_file <- file.path(DIR_CACHE, sprintf('nwp_errors_ref%s_%s.csv', ref_tag, format(Sys.time(), '%Y%m%d%H%M%S')))
+      try(write_csv(err, err_file), silent = TRUE)
+
+      preview <- paste0(utils::head(paste0(err$nwp_key, ': ', err$.error_msg), 25), collapse = '
+')
+      stop('NWP download failed for ', nrow(err), ' key(s). Error log: ', err_file, '
+', preview)
+    }
+
+    out <- out %>% select(-.error_msg)
+  }
+
+  out <- out %>%
+    filter(!is.na(time)) %>%
+    arrange(nwp_key, time) %>%
+    distinct(nwp_key, time, .keep_all = TRUE)
+
   saveRDS(out, nwp_points_rds)
   out
+}
 
-
+# EXPAND key-timeseries to per-uid timeseries
+# (Expected many-to-many: many uids share a key, and each key has many time rows.)
 nwp_all <- uid2nwp %>%
   select(uid, nwp_key) %>%
-  left_join(nwp_by_key, by = 'nwp_key') %>%
+  left_join_mm(nwp_by_key, by = 'nwp_key') %>%
   select(uid, time, TL, RF, FF, DD, GLOW) %>%
   arrange(uid, time)
 
@@ -881,27 +935,29 @@ rm(nwp_all); gc()
 mean_na <- function(x) { m <- mean(x, na.rm = TRUE); if (is.nan(m)) NA_real_ else m }
 
 build_one_uid <- function(uid, inca_by_uid, nwp_by_uid, verbose = TRUE) {
+  uid <- as.integer(uid)[1]
+  if (!is.finite(uid)) stop('uid nicht numeric/finite: ', uid)
+
   row_uid <- assign_run %>% filter(.data$uid == uid) %>% slice(1)
   if (nrow(row_uid) == 0) stop('uid nicht gefunden: ', uid)
-  
+
   station_id <- as.character(row_uid$station_id)
   source     <- as.character(row_uid$source)
   dist_km    <- to_num(row_uid$dist_km)
   dz_m       <- to_num(row_uid$elev_diff_m)  # ice - station
   ice_lon    <- to_num(row_uid$ice_lon)
   ice_lat    <- to_num(row_uid$ice_lat)
-  
+
+  # --- robust name selection (avoids "Unknown or uninitialised column: name") ---
   ice_name <- NA_character_
   if ('icefall_name' %in% names(row_uid)) ice_name <- row_uid$icefall_name
-  if (is.null(ice_name) || is.na(ice_name) || !nzchar(ice_name)) {
-    if ('ice_name' %in% names(row_uid)) ice_name <- row_uid$ice_name
-  }
-  if (is.null(ice_name) || is.na(ice_name) || !nzchar(ice_name)) ice_name <- row_uid$name
+  if ((is.null(ice_name) || is.na(ice_name) || !nzchar(ice_name)) && 'ice_name' %in% names(row_uid)) ice_name <- row_uid$ice_name
+  if ((is.null(ice_name) || is.na(ice_name) || !nzchar(ice_name)) && 'name' %in% names(row_uid)) ice_name <- row_uid$name
   if (is.null(ice_name) || is.na(ice_name) || !nzchar(ice_name)) ice_name <- 'Eisfall'
-  
+
   ice_alt_m <- if ('icefall_elev_m' %in% names(row_uid)) to_num(row_uid$icefall_elev_m) else NA_real_
   ice_fallheight_m <- if ('icefall_height_m' %in% names(row_uid)) to_num(row_uid$icefall_height_m) else NA_real_
-  
+
   # --- Sun + Wind LUT (fallbacks if missing) ---
   sun_uid <- sun_all_run %>%
     filter(.data$uid == uid) %>%
@@ -914,7 +970,7 @@ build_one_uid <- function(uid, inca_by_uid, nwp_by_uid, verbose = TRUE) {
     select(date, sunrise_topo, sunset_topo, sun_hours_topo) %>%
     distinct(date, .keep_all = TRUE) %>%
     filter(date >= START_DATE, date <= END_DATE_EXT)
-  
+
   wind_uid <- wind_lut_run %>%
     filter(.data$uid == uid) %>%
     transmute(
@@ -923,8 +979,7 @@ build_one_uid <- function(uid, inca_by_uid, nwp_by_uid, verbose = TRUE) {
     ) %>%
     filter(is.finite(.data$dir_deg)) %>%
     distinct(.data$dir_deg, .keep_all = TRUE)
-  
-  # --- Station TL/RF (10-min) cached ---
+
   # --- Station TL/RF (10-min) cached ---
   wx10 <- get_station_tlrf_cached(START_DATE, END_DATE, station_id, source, verbose = verbose) %>%
     mutate(
@@ -933,48 +988,48 @@ build_one_uid <- function(uid, inca_by_uid, nwp_by_uid, verbose = TRUE) {
       RF = to_num(RF)
     ) %>%
     filter(is_finite_posix(timestamp))
-  
+
+  if (nrow(wx10) == 0) stop('Station ', station_id, ' (', source, '): wx10 ist leer (keine gültigen timestamps).')
+
+  # ---- Guards (prevent seq(from=NA/Inf, ...) errors) ----
+  wx10 <- wx10 %>% dplyr::filter(!is.na(.data$timestamp))
   if (nrow(wx10) == 0) {
-    stop("Station ", station_id, " (", source, "): wx10 ist leer (keine gültigen timestamps).")
+    stop('Stationzeitreihe leer/nicht parsbar: station=', station_id, ' (', source, ') | window=', START_DATE, '..', END_DATE)
   }
-  if (all(is.na(wx10$TL))) stop("TL fehlt komplett (", station_id, ").")
-  if (all(is.na(wx10$RF))) stop("RF fehlt komplett (", station_id, ").")
-  
-  step_str <- paste0(MODEL_STEP_MIN, " mins")
-  
+  tmin <- suppressWarnings(min(wx10$timestamp, na.rm = TRUE))
+  tmax <- suppressWarnings(max(wx10$timestamp, na.rm = TRUE))
+  if (!is.finite(as.numeric(tmin)) || !is.finite(as.numeric(tmax))) {
+    stop('Stationzeitreihe hat keine gültigen Zeitstempel: station=', station_id, ' (', source, ')')
+  }
+
+  if (all(is.na(wx10$TL))) stop('TL fehlt komplett (', station_id, ').')
+  if (all(is.na(wx10$RF))) stop('RF fehlt komplett (', station_id, ').')
+
+  step_str <- paste0(MODEL_STEP_MIN, ' minutes')
+
   wx_agg <- wx10 %>%
     mutate(time = floor_date(timestamp, unit = step_str)) %>%
     filter(is_finite_posix(time)) %>%
     group_by(time) %>%
-    summarise(
-      TL = mean(TL, na.rm = TRUE),
-      RF = mean(RF, na.rm = TRUE),
-      .groups = "drop"
-    ) %>%
+    summarise(TL = mean(TL, na.rm = TRUE), RF = mean(RF, na.rm = TRUE), .groups = 'drop') %>%
     arrange(time)
-  
-  if (nrow(wx_agg) == 0) {
-    stop("Station ", station_id, " (", source, "): keine gültigen time-bins nach floor_date().")
-  }
-  
+
+  if (nrow(wx_agg) == 0) stop('Station ', station_id, ' (', source, '): keine gültigen time-bins nach floor_date().')
+
   t_min <- min(wx_agg$time)
   t_max <- max(wx_agg$time)
-  if (!is_finite_posix(t_min) || !is_finite_posix(t_max)) {
-    stop("Station ", station_id, " (", source, "): t_min/t_max nicht finite (Parsing/Filterproblem).")
-  }
-  
+  if (!is_finite_posix(t_min) || !is_finite_posix(t_max)) stop('Station ', station_id, ' (', source, '): t_min/t_max nicht finite (Parsing/Filterproblem).')
+
   wx <- wx_agg %>%
-    tidyr::complete(time = safe_seq_posix(t_min, t_max, by = step_str, context = "WX history complete")) %>%
+    tidyr::complete(time = seq(t_min, t_max, by = step_str)) %>%
     arrange(time) %>%
     mutate(TL = fill1(TL), RF = fill1(RF))
-  
+
   # --- INCA override: FF/DD/GLOW (hourly -> 10-min LOCF) ---
   inca_hr <- inca_by_uid[[as.character(uid)]]
-  if (is.null(inca_hr)) inca_hr <- tibble(time = as.POSIXct(character(), tz = TZ_LOCAL),
-                                          FF_inca = NA_real_, DD_inca = NA_real_, GLOW_inca = NA_real_)
-  inca_hr <- inca_hr %>% arrange(time)
-  
-  
+  if (is.null(inca_hr)) inca_hr <- tibble(time = as.POSIXct(character(), tz = TZ_LOCAL), FF_inca = NA_real_, DD_inca = NA_real_, GLOW_inca = NA_real_)
+  inca_hr <- inca_hr %>% arrange(time) %>% distinct(time, .keep_all = TRUE)
+
   wx <- wx %>%
     left_join(inca_hr, by = 'time') %>%
     arrange(time) %>%
@@ -990,46 +1045,40 @@ build_one_uid <- function(uid, inca_by_uid, nwp_by_uid, verbose = TRUE) {
       GLOW = coalesce(GLOW_inca, 0)
     ) %>%
     select(-FF_inca, -DD_inca, -GLOW_inca)
-  
+
   # only keep history up to now
   wx <- wx %>% filter(time <= HIST_END_LOCAL)
-  
+
+  if (nrow(wx) == 0) {
+    stop('Keine historischen Daten <= HIST_END_LOCAL für uid=', uid,
+         ' | station=', station_id, ' (', source, ')',
+         ' | HIST_END_LOCAL=', format(HIST_END_LOCAL, '%Y-%m-%d %H:%M'),
+         ' | Tipp: LWD timestamp parsing/season window prüfen, station-cache ggf. löschen.')
+  }
+  if (nrow(wx) == 0) stop('UID ', uid, ': wx leer nach Filter time <= HIST_END_LOCAL')
+
   HIST_END <- max(wx$time, na.rm = TRUE)
+  if (!is_finite_posix(HIST_END)) stop('UID ', uid, ': HIST_END nicht finite')
   FC_END   <- HIST_END + hours(FORECAST_HOURS)
-  
+
   # --- NWP forecast (hourly -> 10-min LOCF) ---
   nwp_hr <- nwp_by_uid[[as.character(uid)]]
-  if (is.null(nwp_hr)) nwp_hr <- tibble(time = as.POSIXct(character(), tz = TZ_LOCAL),
-                                        TL = NA_real_, RF = NA_real_, FF = NA_real_, DD = NA_real_, GLOW = NA_real_)
-  nwp_hr <- nwp_hr %>% arrange(time)
-  
-  # --- NWP forecast (hourly -> 10-min LOCF), robust ---
-  nwp_hr <- nwp_hr %>%
-    arrange(time) %>%
-    distinct(time, .keep_all = TRUE) %>%
-    mutate(
-      TL = to_num(TL),
-      RF = to_num(RF),
-      FF = to_num(FF),
-      DD = to_num(DD),
-      GLOW = to_num(GLOW)
-    )
-  
-  wx_fc <- tibble(time = safe_seq_posix(
-    HIST_END + minutes(MODEL_STEP_MIN),
-    FC_END,
-    by = step_str,
-    context = "WX forecast seq"
-  )) %>%
-    mutate(time_hr = floor_date(time, "hour")) %>%
-    left_join(nwp_hr %>% rename(time_hr = time), by = "time_hr") %>%
+  if (is.null(nwp_hr)) {
+    nwp_hr <- tibble(time = as.POSIXct(character(), tz = TZ_LOCAL), TL = numeric(), RF = numeric(), FF = numeric(), DD = numeric(), GLOW = numeric())
+  }
+  nwp_hr <- nwp_hr %>% arrange(time) %>% distinct(time, .keep_all = TRUE)
+
+  # safety: ensure expected columns + numeric
+  nwp_hr <- ensure_cols_num(nwp_hr, c('TL','RF','FF','DD','GLOW')) %>%
+    select(time, TL, RF, FF, DD, GLOW)
+
+  wx_fc <- tibble(time = seq(HIST_END + minutes(MODEL_STEP_MIN), FC_END, by = step_str)) %>%
+    mutate(time_hr = floor_date(time, 'hour')) %>%
+    left_join(nwp_hr %>% rename(time_hr = time), by = 'time_hr') %>%
     select(-time_hr) %>%
     arrange(time)
-  
-  # Stelle sicher, dass die Spalten existieren (auch wenn Join leer/kaputt war)
-  for (cc in c("TL","RF","FF","DD","GLOW")) if (!cc %in% names(wx_fc)) wx_fc[[cc]] <- NA_real_
-  
-  wx_fc <- wx_fc %>%
+
+  wx_fc <- ensure_cols_num(wx_fc, c('TL','RF','FF','DD','GLOW')) %>%
     mutate(
       TL   = fill_locf(TL),
       RF   = fill_locf(RF),
@@ -1037,44 +1086,40 @@ build_one_uid <- function(uid, inca_by_uid, nwp_by_uid, verbose = TRUE) {
       DD   = fill_locf(DD),
       GLOW = fill_locf(GLOW)
     )
-  
-  
+
   wx <- bind_rows(wx %>% mutate(is_forecast = FALSE), wx_fc %>% mutate(is_forecast = TRUE)) %>% arrange(time)
-  
+
   # --- Join topo sun + wind vulnerability ---
-  wx <- wx %>%
-    mutate(date = as.Date(time))
-  
+  wx <- wx %>% mutate(date = as.Date(time))
+
   if (nrow(sun_uid) > 0) {
     wx <- wx %>% left_join(sun_uid, by = 'date')
   } else {
     wx <- wx %>% mutate(sunrise_topo = as.POSIXct(NA, tz = TZ_LOCAL), sunset_topo = as.POSIXct(NA, tz = TZ_LOCAL), sun_hours_topo = NA_real_)
   }
-  
+
   wx <- wx %>%
     mutate(
       topo_sun_fac = ifelse(!is.na(sunrise_topo) & !is.na(sunset_topo) & time >= sunrise_topo & time < sunset_topo, 1, 0),
       dd_bin = bin5(DD)
     )
-  
+
   if (nrow(wind_uid) > 0) {
     wx <- wx %>% left_join(wind_uid, by = c('dd_bin' = 'dir_deg'))
   } else {
     wx <- wx %>% mutate(wind_vuln_0_9 = 9L)
   }
-  
-  # ensure wind_vuln_0_9 exists + stable type
+
   if (!'wind_vuln_0_9' %in% names(wx)) wx$wind_vuln_0_9 <- NA_integer_
-  
+
   wx <- wx %>%
     mutate(
       wind_vuln_0_9 = suppressWarnings(as.integer(wind_vuln_0_9)),
       wind_vuln_0_9 = dplyr::coalesce(wind_vuln_0_9, 9L),
-      # clamp to expected domain
       wind_vuln_0_9 = pmin(9L, pmax(0L, wind_vuln_0_9)),
       wind_vuln = pmin(1, pmax(0, wind_vuln_0_9 / 9))
     )
-  
+
   # --- Ice model ---
   ice_params <- list(albedo = 0.50, Hmax_m = 0.90, H0_m = 0.20)
   coef <- list(
@@ -1086,7 +1131,7 @@ build_one_uid <- function(uid, inca_by_uid, nwp_by_uid, verbose = TRUE) {
     k_dry              = 0.25,
     wind_cap_ms        = 15
   )
-  
+
   wx <- wx %>%
     mutate(
       dz_eff = ifelse(is_forecast, 0, dz_m),
@@ -1101,7 +1146,7 @@ build_one_uid <- function(uid, inca_by_uid, nwp_by_uid, verbose = TRUE) {
       base_growth_mm_step = coef$growth_mm_per_C_h * FDH * DT_H * wind_fac * dry_fac,
       base_melt_mm_step   = coef$melt_mm_per_C_h * PDH * DT_H * wind_fac + coef$rad_melt_mm_per_MJ * SW_MJ_step
     )
-  
+
   thickness_mm <- numeric(nrow(wx))
   thickness_mm[1] <- 50
   for (i in 2:nrow(wx)) {
@@ -1112,7 +1157,7 @@ build_one_uid <- function(uid, inca_by_uid, nwp_by_uid, verbose = TRUE) {
     melt   <- wx$base_melt_mm_step[i]
     thickness_mm[i] <- max(0, thickness_mm[i-1] + (growth - melt))
   }
-  
+
   mod <- wx %>%
     mutate(
       thickness_m = thickness_mm / 1000,
@@ -1121,7 +1166,7 @@ build_one_uid <- function(uid, inca_by_uid, nwp_by_uid, verbose = TRUE) {
       dist_km = dist_km,
       dz_m = dz_m
     )
-  
+
   # --- Climbability ---
   H_MIN <- 0.10; H_OPT <- 0.50
   T_OPT <- -4;  T_MIN <- -20; T_MAX <- 0
@@ -1130,14 +1175,14 @@ build_one_uid <- function(uid, inca_by_uid, nwp_by_uid, verbose = TRUE) {
   RANGE_T3 <- max(T3_OPT - T3_MIN, T3_MAX - T3_OPT)
   RH_OPT <- 0.70; RH_SIG <- 0.20
   WIN_72H <- as.integer(72 * 60 / MODEL_STEP_MIN)
-  
+
   score_T_fun_vec <- function(Tv, Topt, Tmin, Tmax, rangeT) {
     s <- 1 - abs(Tv - Topt) / rangeT
     s[Tv <= Tmin | Tv >= Tmax] <- 0
     s[!is.finite(s)] <- NA_real_
     pmax(0, s)
   }
-  
+
   mod <- mod %>%
     mutate(
       TLz_72h = zoo::rollapplyr(TLz, width = WIN_72H, FUN = function(x) mean(x, na.rm = TRUE), fill = NA_real_, partial = TRUE),
@@ -1150,7 +1195,7 @@ build_one_uid <- function(uid, inca_by_uid, nwp_by_uid, verbose = TRUE) {
       climbability = pmin(1, pmax(0, climbability)),
       date = as.Date(time)
     )
-  
+
   climb_hist_daily <- mod %>%
     filter(!is_forecast) %>%
     group_by(date) %>%
@@ -1159,23 +1204,23 @@ build_one_uid <- function(uid, inca_by_uid, nwp_by_uid, verbose = TRUE) {
       climbability = mean_na(climbability),
       .groups = 'drop'
     )
-  
+
   # --- Save CSV ---
   out_csv <- file.path(DIR_MODEL, sprintf('model_uid%03d.csv', uid))
   write_csv(mod, out_csv)
-  
+
   # --- Plot (split hist + forecast) ---
   has_fc <- any(mod$is_forecast %in% TRUE)
   x_min <- as.POSIXct(START_DATE, tz = TZ_LOCAL)
   x_max <- max(mod$time, na.rm = TRUE)
-  
+
   y_min <- min(mod$thickness_m, na.rm = TRUE)
   y_max <- max(mod$thickness_m, na.rm = TRUE)
   Y_DEN <- max(1e-6, y_max - y_min)
-  
+
   mod <- mod %>% mutate(climb_y = y_min + climbability * Y_DEN)
   climb_hist_daily <- climb_hist_daily %>% mutate(climb_y = y_min + climbability * Y_DEN)
-  
+
   if (!has_fc) {
     plt <- ggplot(mod, aes(time, thickness_m)) +
       geom_line(linewidth = 0.9) +
@@ -1184,7 +1229,7 @@ build_one_uid <- function(uid, inca_by_uid, nwp_by_uid, verbose = TRUE) {
       scale_x_datetime(date_breaks = '1 month', date_labels = '%b', timezone = TZ_LOCAL, guide = guide_axis(check.overlap = TRUE)) +
       scale_y_continuous(name = 'Eisdicke (m)', sec.axis = sec_axis(~(. - y_min) / Y_DEN, name = 'Climbability (0–1)')) +
       labs(
-        title = paste0('Modellierte Eisdicke – ', ice_name),
+        title = sprintf('UID %03d – Modellierte Eisdicke – %s', uid, ice_name),
         subtitle = paste(
           c(
             if (!is.na(ice_fallheight_m)) paste0('Eisfallhöhe: ', round(ice_fallheight_m, 0), ' m'),
@@ -1203,27 +1248,28 @@ build_one_uid <- function(uid, inca_by_uid, nwp_by_uid, verbose = TRUE) {
     forecast_start <- min(mod$time[mod$is_forecast], na.rm = TRUE)
     mod_hist <- mod %>% filter(time >= x_min, time < forecast_start)
     mod_fc   <- mod %>% filter(time >= forecast_start)
-    
-    # sun bands in forecast panel
+
     sun_rects_fc <- tibble(xmin = as.POSIXct(character(), tz = TZ_LOCAL), xmax = as.POSIXct(character(), tz = TZ_LOCAL), ymin = numeric(), ymax = numeric())
     if (nrow(mod_fc) > 0) {
-      tmp <- mod_fc %>% arrange(time) %>% filter(!is.na(time)) %>% mutate(is_sun = topo_sun_fac == 1, run = cumsum(is_sun != dplyr::lag(is_sun, default = dplyr::first(is_sun))))
+      tmp <- mod_fc %>%
+        arrange(time) %>%
+        filter(!is.na(time)) %>%
+        mutate(is_sun = topo_sun_fac == 1, run = cumsum(is_sun != dplyr::lag(is_sun, default = dplyr::first(is_sun))))
       tmp_sun <- tmp %>% filter(is_sun)
       if (nrow(tmp_sun) > 0) {
         sun_rects_fc <- tmp_sun %>% group_by(run) %>% reframe(xmin = min(time), xmax = max(time) + minutes(MODEL_STEP_MIN), ymin = -Inf, ymax = Inf)
       }
     }
-    
+
     peak_fc <- mod_fc %>%
       filter(is.finite(climbability)) %>%
       group_by(date) %>%
       slice_max(order_by = climbability, n = 1, with_ties = FALSE) %>%
       ungroup() %>%
-      transmute(peak_time = time, peak_label = format(time, "%d.%m
-%H:%M"))
-    
+      transmute(peak_time = time, peak_label = format(time, "%d.%m\n%H:%M"))
+
     bg <- tibble(xmin = forecast_start, xmax = x_max, ymin = -Inf, ymax = Inf)
-    
+
     p_hist <- ggplot(mod_hist, aes(time, thickness_m)) +
       geom_line(linewidth = 0.9) +
       geom_line(data = climb_hist_daily, aes(time, climb_y), inherit.aes = FALSE, linewidth = 0.85, color = 'red', na.rm = TRUE) +
@@ -1239,7 +1285,7 @@ build_one_uid <- function(uid, inca_by_uid, nwp_by_uid, verbose = TRUE) {
         axis.ticks.y.right = element_blank(),
         axis.title.y.right = element_blank()
       )
-    
+
     p_fc <- ggplot(mod_fc, aes(time, thickness_m)) +
       geom_rect(data = bg, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax), inherit.aes = FALSE, fill = 'grey85', alpha = 0.6) +
       geom_rect(data = sun_rects_fc, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax), inherit.aes = FALSE, fill = 'yellow', alpha = 0.25) +
@@ -1262,11 +1308,11 @@ build_one_uid <- function(uid, inca_by_uid, nwp_by_uid, verbose = TRUE) {
         axis.title.y.right = element_text(margin = margin(l = 6)),
         axis.text.x = element_text(size = 9, lineheight = 0.95)
       )
-    
+
     plt <- (p_hist + p_fc) +
       patchwork::plot_layout(widths = c(2, 1)) +
       patchwork::plot_annotation(
-        title = paste0('Modellierte Eisdicke – ', ice_name),
+        title = sprintf('UID %03d – Modellierte Eisdicke – %s', uid, ice_name),
         subtitle = paste(
           c(
             if (!is.na(ice_alt_m)) paste0('Höhe: ', round(ice_alt_m, 0), ' m'),
@@ -1280,14 +1326,14 @@ build_one_uid <- function(uid, inca_by_uid, nwp_by_uid, verbose = TRUE) {
         caption = paste0('10-min Modell (dt=', MODEL_STEP_MIN, ' min): FDH/PDH + SW(toposun) + Wind(vuln) + Dryness + Sättigung')
       )
   }
-  
+
   plot_file <- file.path(DIR_PLOTS, sprintf('uid_%03d.png', uid))
   ggsave(filename = plot_file, plot = plt, width = 14, height = 5, units = 'in', dpi = 200, bg = 'white')
-  
+
   if (verbose) {
     message(sprintf('✅ UID %d: CSV -> %s | Plot -> %s', uid, out_csv, plot_file))
   }
-  
+
   invisible(list(csv = out_csv, plot = plot_file))
 }
 
@@ -1298,19 +1344,27 @@ failed <- integer(0)
 
 for (u in uids) {
   log_header(paste0('📈 Build Plot UID: ', u), level = 1)
-  
+
   if (LOG_LEVEL >= 2) {
     r0 <- assign_run %>% filter(.data$uid == u) %>% slice(1)
+
+    # robust name extraction for logs (no warnings if columns missing)
+    nm <- NA_character_
+    if ('icefall_name' %in% names(r0)) nm <- r0$icefall_name
+    if ((is.null(nm) || is.na(nm) || !nzchar(nm)) && 'ice_name' %in% names(r0)) nm <- r0$ice_name
+    if ((is.null(nm) || is.na(nm) || !nzchar(nm)) && 'name' %in% names(r0)) nm <- r0$name
+
     inca_k <- uid2inca$inca_key[match(u, uid2inca$uid)][1]
     nwp_k  <- uid2nwp$nwp_key[match(u, uid2nwp$uid)][1]
-    log_msg(2, 'name=', as.character(r0$name),
+
+    log_msg(2, 'name=', as.character(nm),
             ' | station=', as.character(r0$station_id), ' (', as.character(r0$source), ')',
             ' | dist_km=', as.character(r0$dist_km),
             ' | dz_m=', as.character(r0$elev_diff_m),
             ' | inca_key=', inca_k,
             ' | nwp_key=', nwp_k)
   }
-  
+
   ok <- TRUE
   tryCatch({
     build_one_uid(u, inca_by_uid = inca_by_uid, nwp_by_uid = nwp_by_uid, verbose = TRUE)
@@ -1318,10 +1372,9 @@ for (u in uids) {
     ok <<- FALSE
     message('❌ UID ', u, ' fehlgeschlagen: ', e$message)
   })
-  
+
   if (!ok) failed <- c(failed, u)
 }
 
 if (length(failed) > 0) stop('Plots/ModelRuns fehlgeschlagen für UIDs: ', paste(failed, collapse = ', '))
-message("
-✅ Alle Plots gebaut: ", length(uids))
+message("\n✅ Alle Plots gebaut: ", length(uids))
