@@ -101,6 +101,8 @@ for (d in c(DIR_CACHE, DIR_STATION, PATH_INCA_DIR, PATH_NWP_DIR, DIR_MODEL, DIR_
 # ----------------------------
 # Helpers
 # ----------------------------
+is_finite_posix <- function(x) is.finite(as.numeric(x))
+
 season_start_oct <- function(d) {
   d <- as.Date(d)
   y <- year(d); m <- month(d)
@@ -359,8 +361,8 @@ get_geosphere_station_tlrf <- function(start_date, end_date, station_id) {
     st <- resp_status(resp)
     if (st < 400) {
       dat <- jsonlite::fromJSON(resp_body_string(resp), simplifyVector = FALSE)
-      ts_raw <- dat[['timestamps']]
-      time_utc <- suppressWarnings(lubridate::ymd_hms(ts_raw, tz = 'UTC'))
+      ts_raw <- dat[["timestamps"]]
+      time_utc <- parse_time_any_utc(ts_raw)
       if (all(is.na(time_utc))) {
         ts_fix <- ts_raw
         has_colon_tz <- grepl('([+-][0-9]{2}):([0-9]{2})$', ts_fix)
@@ -414,18 +416,46 @@ station_cache_file <- function(start_date, end_date, station_id, source) {
   f
 }
 
+is_finite_posix <- function(x) is.finite(as.numeric(x))
+
 get_station_tlrf_cached <- function(start_date, end_date, station_id, source, verbose = TRUE) {
   f <- station_cache_file(start_date, end_date, station_id, source)
+  
+  # --- Cache lesen + VALIDIEREN ---
   if (file.exists(f) && file.info(f)$size > 0) {
-    if (verbose) message('Station ', station_id, ' (', source, '): cache hit')
-    log_msg(2, 'Station cache file -> ', f)
-    return(readRDS(f))
+    dat <- tryCatch(readRDS(f), error = function(e) NULL)
+    
+    ok <- !is.null(dat) &&
+      is.data.frame(dat) &&
+      "timestamp" %in% names(dat)
+    
+    if (ok) {
+      # robustes Parsing (auch wenn timestamp als character/factor drinliegt)
+      dat$timestamp <- parse_dt_any(dat$timestamp, tz = TZ_LOCAL)
+      ok <- any(is_finite_posix(dat$timestamp))
+    }
+    
+    if (ok) {
+      if (verbose) message("Station ", station_id, " (", source, "): cache hit")
+      log_msg(2, "Station cache file -> ", f)
+      return(dat)
+    } else {
+      message("Station ", station_id, " (", source, "): cache INVALID -> rebuild: ", f)
+      try(file.remove(f), silent = TRUE)
+    }
   }
   
-  if (verbose) message('Station ', station_id, ' (', source, '): cache miss (initial)')
-  log_msg(2, 'Station cache file -> ', f)
+  # --- Neu bauen ---
+  if (verbose) message("Station ", station_id, " (", source, "): cache miss (initial)")
+  log_msg(2, "Station cache file -> ", f)
   
   dat <- get_station_tlrf(start_date, end_date, station_id, source)
+  dat$timestamp <- parse_dt_any(dat$timestamp, tz = TZ_LOCAL)
+  
+  if (!any(is_finite_posix(dat$timestamp))) {
+    stop("Station ", station_id, " (", source, "): keine gültigen Timestamps nach Parsing (Download/Formatproblem).")
+  }
+  
   saveRDS(dat, f)
   dat
 }
@@ -859,23 +889,46 @@ build_one_uid <- function(uid, inca_by_uid, nwp_by_uid, verbose = TRUE) {
     distinct(.data$dir_deg, .keep_all = TRUE)
   
   # --- Station TL/RF (10-min) cached ---
+  # --- Station TL/RF (10-min) cached ---
   wx10 <- get_station_tlrf_cached(START_DATE, END_DATE, station_id, source, verbose = verbose) %>%
     mutate(
-      timestamp = with_tz(as.POSIXct(timestamp, tz = TZ_LOCAL), TZ_LOCAL),
+      timestamp = parse_dt_any(timestamp, tz = TZ_LOCAL),
       TL = to_num(TL),
       RF = to_num(RF)
-    )
+    ) %>%
+    filter(is_finite_posix(timestamp))
   
-  if (all(is.na(wx10$TL))) stop('TL fehlt komplett (', station_id, ').')
-  if (all(is.na(wx10$RF))) stop('RF fehlt komplett (', station_id, ').')
+  if (nrow(wx10) == 0) {
+    stop("Station ", station_id, " (", source, "): wx10 ist leer (keine gültigen timestamps).")
+  }
+  if (all(is.na(wx10$TL))) stop("TL fehlt komplett (", station_id, ").")
+  if (all(is.na(wx10$RF))) stop("RF fehlt komplett (", station_id, ").")
   
-  step_str <- paste0(MODEL_STEP_MIN, ' mins')
+  step_str <- paste0(MODEL_STEP_MIN, " mins")
   
-  wx <- wx10 %>%
+  wx_agg <- wx10 %>%
     mutate(time = floor_date(timestamp, unit = step_str)) %>%
+    filter(is_finite_posix(time)) %>%
     group_by(time) %>%
-    summarise(TL = mean(TL, na.rm = TRUE), RF = mean(RF, na.rm = TRUE), .groups = 'drop') %>%
-    tidyr::complete(time = seq(min(time), max(time), by = step_str)) %>%
+    summarise(
+      TL = mean(TL, na.rm = TRUE),
+      RF = mean(RF, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    arrange(time)
+  
+  if (nrow(wx_agg) == 0) {
+    stop("Station ", station_id, " (", source, "): keine gültigen time-bins nach floor_date().")
+  }
+  
+  t_min <- min(wx_agg$time)
+  t_max <- max(wx_agg$time)
+  if (!is_finite_posix(t_min) || !is_finite_posix(t_max)) {
+    stop("Station ", station_id, " (", source, "): t_min/t_max nicht finite (Parsing/Filterproblem).")
+  }
+  
+  wx <- wx_agg %>%
+    tidyr::complete(time = seq(t_min, t_max, by = step_str)) %>%
     arrange(time) %>%
     mutate(TL = fill1(TL), RF = fill1(RF))
   
