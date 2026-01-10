@@ -1,4 +1,4 @@
-name: build-and-deploy
+name: Build_Icefalls
 
 on:
   schedule:
@@ -64,13 +64,13 @@ jobs:
             any::raster
             any::ncdf4
 
-      - name: Build plots (ALL or ONLY_UID)
-        run: Rscript scripts/00_build_all_plots_oneprocess.R
-
       # Map/List nur bauen, wenn du wirklich deployen willst ODER wenn es ein Scheduled Run ist
       - name: Build map
         if: ${{ github.event_name == 'schedule' || github.event.inputs.deploy == 'true' }}
         run: Rscript scripts/01_build_map.R
+        
+      - name: Build plots (ALL or ONLY_UID)
+        run: Rscript scripts/00_build_all_plots_oneprocess.R
 
       - name: Build list page
         if: ${{ github.event_name == 'schedule' || github.event.inputs.deploy == 'true' }}
