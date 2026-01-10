@@ -70,7 +70,7 @@ jobs:
         run: Rscript scripts/01_build_map.R
         
       - name: Build plots (ALL or ONLY_UID)
-        run: Rscript scripts/00_build_all_plots_oneprocess.R
+        run: Rscript scripts/00_build_plots_all.R
 
       - name: Build list page
         if: ${{ github.event_name == 'schedule' || github.event.inputs.deploy == 'true' }}
