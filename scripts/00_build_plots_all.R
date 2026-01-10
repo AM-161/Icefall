@@ -101,6 +101,40 @@ for (d in c(DIR_CACHE, DIR_STATION, PATH_INCA_DIR, PATH_NWP_DIR, DIR_MODEL, DIR_
 # ----------------------------
 # Helpers
 # ----------------------------
+fill_locf <- function(x) {
+  # robust: immer auf numeric ziehen; falls es trotzdem knallt -> NA zurück
+  x <- to_num(x)
+  tryCatch({
+    x <- zoo::na.locf(x, na.rm = FALSE)
+    x <- zoo::na.locf(x, na.rm = FALSE, fromLast = TRUE)
+    x
+  }, error = function(e) {
+    rep(NA_real_, length(x))
+  })
+}
+
+is_finite_time <- function(x) is.finite(as.numeric(x))
+
+safe_seq_posix <- function(from, to, by, context = "") {
+  if (!is_finite_time(from) || !is_finite_time(to)) {
+    stop(sprintf(
+      "SEQ FAIL [%s]: from=%s (class=%s) | to=%s (class=%s)",
+      context, as.character(from), paste(class(from), collapse="/"),
+      as.character(to),   paste(class(to), collapse="/")
+    ))
+  }
+  seq(from, to, by = by)
+}
+
+safe_seq_date <- function(from, to, by, context = "") {
+  from <- as.Date(from); to <- as.Date(to)
+  if (is.na(from) || is.na(to)) {
+    stop(sprintf("SEQ FAIL [%s]: from=%s | to=%s", context, as.character(from), as.character(to)))
+  }
+  seq(from, to, by = by)
+}
+
+
 is_finite_posix <- function(x) is.finite(as.numeric(x))
 
 season_start_oct <- function(d) {
@@ -324,7 +358,9 @@ read_lwd_param <- function(station_code, param, season) {
 }
 
 get_lwd_station_tlrf <- function(start_date, end_date, station_code) {
-  seasons <- unique(season_label(seq(as.Date(start_date), as.Date(end_date), by = 'day')))
+  seasons <- unique(season_label(
+    safe_seq_date(as.Date(start_date), as.Date(end_date), by = "day", context = "LWD seasons")
+  ))
   tl <- bind_rows(lapply(seasons, function(seas) read_lwd_param(station_code, 'LT', seas))) %>% mutate(param = 'TL')
   rf <- bind_rows(lapply(seasons, function(seas) read_lwd_param(station_code, 'LF', seas))) %>% mutate(param = 'RF')
   long <- bind_rows(tl, rf)
@@ -928,7 +964,7 @@ build_one_uid <- function(uid, inca_by_uid, nwp_by_uid, verbose = TRUE) {
   }
   
   wx <- wx_agg %>%
-    tidyr::complete(time = seq(t_min, t_max, by = step_str)) %>%
+    tidyr::complete(time = safe_seq_posix(t_min, t_max, by = step_str, context = "WX history complete")) %>%
     arrange(time) %>%
     mutate(TL = fill1(TL), RF = fill1(RF))
   
@@ -967,24 +1003,41 @@ build_one_uid <- function(uid, inca_by_uid, nwp_by_uid, verbose = TRUE) {
                                         TL = NA_real_, RF = NA_real_, FF = NA_real_, DD = NA_real_, GLOW = NA_real_)
   nwp_hr <- nwp_hr %>% arrange(time)
   
-  
-  wx_fc <- tibble(time = seq(HIST_END + minutes(MODEL_STEP_MIN), FC_END, by = step_str)) %>%
-    mutate(time_hr = floor_date(time, 'hour')) %>%
-    left_join(nwp_hr %>% rename(time_hr = time), by = 'time_hr') %>%
-    select(-time_hr) %>%
+  # --- NWP forecast (hourly -> 10-min LOCF), robust ---
+  nwp_hr <- nwp_hr %>%
     arrange(time) %>%
+    distinct(time, .keep_all = TRUE) %>%
     mutate(
-      TL   = zoo::na.locf(TL,   na.rm = FALSE),
-      RF   = zoo::na.locf(RF,   na.rm = FALSE),
-      FF   = zoo::na.locf(FF,   na.rm = FALSE),
-      DD   = zoo::na.locf(DD,   na.rm = FALSE),
-      GLOW = zoo::na.locf(GLOW, na.rm = FALSE),
-      TL   = zoo::na.locf(TL,   na.rm = FALSE, fromLast = TRUE),
-      RF   = zoo::na.locf(RF,   na.rm = FALSE, fromLast = TRUE),
-      FF   = zoo::na.locf(FF,   na.rm = FALSE, fromLast = TRUE),
-      DD   = zoo::na.locf(DD,   na.rm = FALSE, fromLast = TRUE),
-      GLOW = zoo::na.locf(GLOW, na.rm = FALSE, fromLast = TRUE)
+      TL = to_num(TL),
+      RF = to_num(RF),
+      FF = to_num(FF),
+      DD = to_num(DD),
+      GLOW = to_num(GLOW)
     )
+  
+  wx_fc <- tibble(time = safe_seq_posix(
+    HIST_END + minutes(MODEL_STEP_MIN),
+    FC_END,
+    by = step_str,
+    context = "WX forecast seq"
+  )) %>%
+    mutate(time_hr = floor_date(time, "hour")) %>%
+    left_join(nwp_hr %>% rename(time_hr = time), by = "time_hr") %>%
+    select(-time_hr) %>%
+    arrange(time)
+  
+  # Stelle sicher, dass die Spalten existieren (auch wenn Join leer/kaputt war)
+  for (cc in c("TL","RF","FF","DD","GLOW")) if (!cc %in% names(wx_fc)) wx_fc[[cc]] <- NA_real_
+  
+  wx_fc <- wx_fc %>%
+    mutate(
+      TL   = fill_locf(TL),
+      RF   = fill_locf(RF),
+      FF   = fill_locf(FF),
+      DD   = fill_locf(DD),
+      GLOW = fill_locf(GLOW)
+    )
+  
   
   wx <- bind_rows(wx %>% mutate(is_forecast = FALSE), wx_fc %>% mutate(is_forecast = TRUE)) %>% arrange(time)
   
