@@ -92,8 +92,8 @@ extract_hm <- function(x) {
   out <- rep(NA_character_, length(x))
   ok <- !is.na(x)
   if (any(ok)) {
-    # IMPORTANT: word-boundary must be \\b (R would turn \b into backspace)
-    m <- regexpr("\\\\b([01]?[0-9]|2[0-3]):[0-5][0-9]\\\\b", x[ok], perl = TRUE)
+    # IMPORTANT: use \b as word-boundary ("\b"), not "" (backspace)
+    m <- regexpr("\b([01]?[0-9]|2[0-3]):[0-5][0-9]\b", x[ok], perl = TRUE)
     hit <- m > 0
     out_ok <- rep(NA_character_, sum(ok))
     out_ok[hit] <- regmatches(x[ok], m)[hit]
@@ -378,9 +378,7 @@ jsonlite::write_json(out, OUT_JSON, pretty = TRUE, auto_unbox = TRUE, na = "null
 message("✅ Wrote JSON: ", OUT_JSON)
 
 # ----------------------------
-# 7) Write list.html
-#    IMPORTANT FIX: avoid nested JS template literals (backticks inside backticks)
-#    because that causes: "Missing } in template expression" in browsers.
+# 7) Write list.html (NO sprintf -> avoids % issues)
 # ----------------------------
 tom_str <- format(tomorrow, "%d.%m.%Y")
 
@@ -491,8 +489,6 @@ html <- paste0(
   let sortKey = "climb_max_tomorrow";
   let sortAsc = false;
 
-  const dash = \'<span class="muted">—</span>\';
-
   // when sorting by these, ALWAYS push missing values to the bottom
   const missingAlwaysBottomKeys = new Set(["climb_max_tomorrow", "thickness_tomorrow_07_m", "sun_hours_tomorrow_h"]);
 
@@ -569,21 +565,11 @@ html <- paste0(
     for(const r of view){
       const tr = document.createElement("tr");
 
-      const topoLink = r.topo_url
-        ? `<a href="${r.topo_url}" target="_blank" rel="noopener">Topo</a>`
-        : dash;
-
+      const topoLink = r.topo_url ? `<a href="${r.topo_url}" target="_blank" rel="noopener">Topo</a>` : "<span class=\\"muted\\">—</span>";
       const plotUrl = r.plot_url || "";
-      const safeTitle = str(r.name).replace(/"/g, "&quot;");
-
       const plotBtn = plotUrl
-        ? `<button class="btn" data-plot="${plotUrl}" data-title="${safeTitle}">🔍 Vollbild</button>`
-        : dash;
-
-      // IMPORTANT: do NOT nest template literals inside template literals
-      const plotLink = plotUrl
-        ? `<a class="muted small" href="${plotUrl}" target="_blank" rel="noopener">neu Tab</a>`
-        : "";
+        ? `<button class="btn" data-plot="${plotUrl}" data-title="${str(r.name).replace(/\"/g, "&quot;")}">🔍 Vollbild</button>`
+        : `<span class="muted">—</span>`;
 
       tr.innerHTML = `
         <td>
@@ -592,26 +578,24 @@ html <- paste0(
             ${r.station_id ? ("Station: " + str(r.station_id) + (r.source ? (" (" + str(r.source) + ")") : "")) : ""}
           </div>
         </td>
-        <td>${str(r.difficulty) || dash}</td>
-        <td>${isFinite(num(r.elev_m)) ? Math.round(num(r.elev_m)) : dash}</td>
-        <td>${str(r.sun_tomorrow_range_txt) || dash}</td>
-        <td>${str(r.sun_duration_tomorrow_txt) || dash}</td>
-        <td>${r.thickness_tomorrow_07_txt || dash}</td>
-        <td>${r.climb_max_tomorrow_txt || dash}</td>
-        <td>${str(r.climb_max_time_local) || dash}</td>
-        <td>${plotBtn} ${plotLink}</td>
+        <td>${str(r.difficulty) || "<span class=\\"muted\\">—</span>"}</td>
+        <td>${isFinite(num(r.elev_m)) ? Math.round(num(r.elev_m)) : "<span class=\\"muted\\">—</span>"}</td>
+        <td>${str(r.sun_tomorrow_range_txt) || "<span class=\"muted\">—</span>"}</td>
+        <td>${str(r.sun_duration_tomorrow_txt) || "<span class=\"muted\">—</span>"}</td>
+        <td>${r.thickness_tomorrow_07_txt || "<span class=\\"muted\\">—</span>"}</td>
+        <td>${r.climb_max_tomorrow_txt || "<span class=\\"muted\\">—</span>"}</td>
+        <td>${str(r.climb_max_time_local) || "<span class=\\"muted\\">—</span>"}</td>
+        <td>${plotBtn} ${plotUrl ? `<a class="muted small" href="${plotUrl}" target="_blank" rel="noopener">neu Tab</a>` : ""}</td>
         <td>${topoLink}</td>
       `;
-
       tbody.appendChild(tr);
     }
 
-    Array.from(document.querySelectorAll("button[data-plot]"))
-      .forEach(btn => {
-        btn.addEventListener("click", () => {
-          openFullscreen(btn.getAttribute("data-plot"), btn.getAttribute("data-title"));
-        });
+    Array.from(document.querySelectorAll("button[data-plot]")).forEach(btn => {
+      btn.addEventListener("click", () => {
+        openFullscreen(btn.getAttribute("data-plot"), btn.getAttribute("data-title"));
       });
+    });
 
     status.textContent = `Einträge: ${view.length} / ${rows.length}  | Sort: ${sortKey} ${sortAsc ? "↑" : "↓"}`;
   }
@@ -628,17 +612,13 @@ html <- paste0(
   q.addEventListener("input", render);
 
   fetch("icefalls_table.json", {cache: "no-store"})
-    .then(r => {
-      if (!r.ok) throw new Error(`HTTP ${r.status} ${r.statusText}`);
-      return r.json();
-    })
+    .then(r => r.json())
     .then(data => {
       rows = data || [];
       status.textContent = "Daten geladen.";
       render();
     })
     .catch(err => {
-      console.error(err);
       status.textContent = "Fehler beim Laden: " + err;
     });
 })();

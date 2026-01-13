@@ -188,7 +188,6 @@ T2M_arr <- inca_nordtirol_all$data$T2M   # °C [nx, ny, nt]
 RH_arr  <- inca_nordtirol_all$data$RH2M  # %  [nx, ny, nt]
 UU_arr  <- inca_nordtirol_all$data$UU    # m/s
 VV_arr  <- inca_nordtirol_all$data$VV    # m/s
-GL_arr  <- inca_nordtirol_all$data$GL
 
 lon <- inca_nordtirol_all$lon
 lat <- inca_nordtirol_all$lat
@@ -207,7 +206,6 @@ if (lat_mean_j[1] < tail(lat_mean_j, 1)) {
   RH_arr  <- RH_arr[,  idx_j, , drop = FALSE]
   UU_arr  <- UU_arr[,  idx_j, , drop = FALSE]
   VV_arr  <- VV_arr[,  idx_j, , drop = FALSE]
-  GL_arr  <- GL_arr[,  idx_j, , drop = FALSE]
 }
 
 lon_mean_i <- rowMeans(lon, na.rm = TRUE)
@@ -219,7 +217,6 @@ if (lon_mean_i[1] > tail(lon_mean_i, 1)) {
   RH_arr  <- RH_arr[idx_i, , , drop = FALSE]
   UU_arr  <- UU_arr[idx_i, , , drop = FALSE]
   VV_arr  <- VV_arr[idx_i, , , drop = FALSE]
-  GL_arr  <- GL_arr[idx_i, , , drop = FALSE]
 }
 
 nx <- dim(T2M_arr)[1]
@@ -582,7 +579,7 @@ names(climb_r)  <- "Climbability_0_1"
 # 8) Prognose aus NWP --------------------------------------------------
 
 base_url_nwp   <- "https://dataset.api.hub.geosphere.at/v1/grid/forecast/nwp-v1-1h-2500m"
-parameters_nwp <- c("t2m", "rh2m", "u10m", "v10m", "grad")
+parameters_nwp <- c("t2m", "rh2m", "u10m", "v10m")
 param_str_nwp  <- paste(parameters_nwp, collapse = ",")
 
 t_now    <- max(inca_nordtirol_all$time, na.rm = TRUE)
@@ -650,19 +647,16 @@ if (file.exists(outfile_fc)) {
     RH2M_fc_brick <- brick(outfile_fc, varname = "rh2m")[[keep_fc]]
     U10_fc_brick  <- brick(outfile_fc, varname = "u10m")[[keep_fc]]
     V10_fc_brick  <- brick(outfile_fc, varname = "v10m")[[keep_fc]]
-    GRAD_fc_brick <- brick(outfile_fc, varname = "grad")[[keep_fc]]
     
     crs(T2M_fc_brick)  <- crs(r_template)
     crs(RH2M_fc_brick) <- crs(r_template)
     crs(U10_fc_brick)  <- crs(r_template)
     crs(V10_fc_brick)  <- crs(r_template)
-    crs(GRAD_fc_brick) <- crs(r_template)
     
     T2M_fc  <- resample(T2M_fc_brick,  r_template, method = "bilinear")
     RH2M_fc <- resample(RH2M_fc_brick, r_template, method = "bilinear")
     U10_fc  <- resample(U10_fc_brick,  r_template, method = "bilinear")
     V10_fc  <- resample(V10_fc_brick,  r_template, method = "bilinear")
-    GRAD_fc <- resample(GRAD_fc_brick, r_template, method = "bilinear")
     
     W_fc <- overlay(U10_fc, V10_fc, fun = function(u, v) sqrt(u^2 + v^2))
     
@@ -806,153 +800,6 @@ if (file.exists(outfile_fc)) {
     
     fc_step_hours <- target_hours_all
   }
-}
-
-# ============================================================
-# EXPORT Point-Caches for plot build (NO extra API calls)
-# ============================================================
-dir.create("data/_cache_geosphere", recursive = TRUE, showWarnings = FALSE)
-
-TZ_LOCAL <- "Europe/Vienna"
-INCA_KEY_DECIMALS <- suppressWarnings(as.integer(Sys.getenv("INCA_KEY_DECIMALS", "3")))
-NWP_KEY_DECIMALS  <- suppressWarnings(as.integer(Sys.getenv("NWP_KEY_DECIMALS",  "3")))
-if (!is.finite(INCA_KEY_DECIMALS) || INCA_KEY_DECIMALS < 2) INCA_KEY_DECIMALS <- 3
-if (!is.finite(NWP_KEY_DECIMALS)  || NWP_KEY_DECIMALS  < 2) NWP_KEY_DECIMALS  <- 3
-
-to_num <- function(x){
-  x <- as.character(x); x <- gsub(",", ".", x, fixed = TRUE)
-  suppressWarnings(as.numeric(x))
-}
-
-coord_key <- function(prefix, lat, lon, decimals = 3) {
-  lat <- to_num(lat); lon <- to_num(lon)
-  ok <- is.finite(lat) & is.finite(lon)
-  out <- rep(NA_character_, length(lat))
-  if (!any(ok)) return(out)
-  fmt <- paste0("%.", decimals, "f")
-  out[ok] <- paste0(prefix, "_", sprintf(fmt, round(lat[ok], decimals)), "_", sprintf(fmt, round(lon[ok], decimals)))
-  gsub("[^A-Za-z0-9_-]", "_", out)
-}
-
-nearest_idx <- function(vec, x) which.min(abs(vec - x))
-
-# Load icefall coords (same source as plots)
-assign_pts <- readr::read_csv("data/AWS/icefalls_nearest_station.csv", show_col_types = FALSE) %>%
-  dplyr::mutate(
-    uid = suppressWarnings(as.integer(uid)),
-    ice_lat = to_num(ice_lat),
-    ice_lon = to_num(ice_lon)
-  ) %>%
-  dplyr::filter(is.finite(uid), is.finite(ice_lat), is.finite(ice_lon)) %>%
-  dplyr::distinct(uid, ice_lat, ice_lon)
-
-# Regular grid vectors (after your orientation flips)
-lon1 <- as.numeric(lon[,1])
-lat1 <- as.numeric(lat[1,])
-
-# --------
-# INCA by key (hourly -> point timeseries)
-# --------
-uid2inca <- assign_pts %>%
-  dplyr::mutate(inca_key = coord_key("inca", ice_lat, ice_lon, decimals = INCA_KEY_DECIMALS)) %>%
-  dplyr::distinct(inca_key, ice_lat, ice_lon) %>%
-  dplyr::filter(!is.na(inca_key))
-
-i_idx <- vapply(uid2inca$ice_lon, function(x) nearest_idx(lon1, x), integer(1))
-j_idx <- vapply(uid2inca$ice_lat, function(y) nearest_idx(lat1, y), integer(1))
-
-time_inca_local <- lubridate::with_tz(inca_nordtirol_all$time, TZ_LOCAL)
-
-inca_rows <- lapply(seq_len(nrow(uid2inca)), function(k){
-  i <- i_idx[k]; j <- j_idx[k]
-  UU <- as.numeric(UU_arr[i, j, ])
-  VV <- as.numeric(VV_arr[i, j, ])
-  GL <- as.numeric(GL_arr[i, j, ])
-  FF <- sqrt(UU^2 + VV^2)
-  DD <- (atan2(UU, VV) * 180/pi + 180) %% 360
-  tibble::tibble(
-    inca_key  = uid2inca$inca_key[k],
-    time      = time_inca_local,
-    FF_inca   = FF,
-    DD_inca   = DD,
-    GLOW_inca = GL
-  )
-})
-
-inca_by_key <- dplyr::bind_rows(inca_rows) %>%
-  dplyr::arrange(inca_key, time)
-
-inca_points_rds <- file.path(
-  "data/_cache_geosphere",
-  sprintf("inca_points_bykey_%s_%s_d%d.rds",
-          format(start_all, "%Y%m%d"),
-          format(end_all,   "%Y%m%d"),
-          INCA_KEY_DECIMALS)
-)
-saveRDS(inca_by_key, inca_points_rds)
-message("✅ wrote INCA point cache: ", inca_points_rds)
-
-# --------
-# NWP by key (forecast hourly -> point timeseries)
-# Requires: time_fc, T2M_fc, RH2M_fc, U10_fc, V10_fc, GRAD_fc
-# --------
-if (exists("time_fc") && exists("T2M_fc") && exists("RH2M_fc") && exists("U10_fc") && exists("V10_fc") && exists("GRAD_fc")) {
-  
-  grad_to_glow_wm2_vec <- function(grad_ws_m2) {
-    g <- as.numeric(grad_ws_m2)
-    g[!is.finite(g)] <- NA_real_
-    if (all(is.na(g))) return(g)
-    g <- zoo::na.locf(g, na.rm = FALSE)
-    g <- zoo::na.locf(g, na.rm = FALSE, fromLast = TRUE)
-    inc <- c(g[1], diff(g))
-    reset <- inc < 0
-    inc[reset] <- g[reset]
-    inc <- pmax(0, inc)
-    inc / 3600
-  }
-  
-  uid2nwp <- assign_pts %>%
-    dplyr::mutate(nwp_key = coord_key("nwp", ice_lat, ice_lon, decimals = NWP_KEY_DECIMALS)) %>%
-    dplyr::distinct(nwp_key, ice_lat, ice_lon) %>%
-    dplyr::filter(!is.na(nwp_key))
-  
-  coords <- as.matrix(uid2nwp[, c("ice_lon","ice_lat")])
-  
-  t2m_mat  <- raster::extract(T2M_fc,  coords)
-  rh2m_mat <- raster::extract(RH2M_fc, coords)
-  u10_mat  <- raster::extract(U10_fc,  coords)
-  v10_mat  <- raster::extract(V10_fc,  coords)
-  grad_mat <- raster::extract(GRAD_fc, coords)
-  
-  FF_mat <- sqrt(u10_mat^2 + v10_mat^2)
-  DD_mat <- (atan2(u10_mat, v10_mat) * 180/pi + 180) %% 360
-  GLOW_mat <- t(apply(grad_mat, 1, grad_to_glow_wm2_vec))
-  
-  time_fc_local <- lubridate::with_tz(time_fc, TZ_LOCAL)
-  npt <- nrow(uid2nwp); ntf <- length(time_fc_local)
-  
-  nwp_by_key <- tibble::tibble(
-    nwp_key = rep(uid2nwp$nwp_key, each = ntf),
-    time    = rep(time_fc_local, times = npt),
-    TL      = as.vector(t(t2m_mat)),
-    RF      = as.vector(t(rh2m_mat)),
-    FF      = as.vector(t(FF_mat)),
-    DD      = as.vector(t(DD_mat)),
-    GLOW    = as.vector(t(GLOW_mat))
-  ) %>% dplyr::arrange(nwp_key, time)
-  
-  nwp_points_rds <- file.path(
-    "data/_cache_geosphere",
-    sprintf("nwp_points_bykey_%s_%sh_d%d.rds",
-            format(as.Date(max(inca_nordtirol_all$time, na.rm = TRUE)), "%Y%m%d"),
-            fc_h_max,
-            NWP_KEY_DECIMALS)
-  )
-  saveRDS(nwp_by_key, nwp_points_rds)
-  message("✅ wrote NWP point cache: ", nwp_points_rds)
-  
-} else {
-  message("⚠️ Skip NWP point cache: forecast rasters/time not available (check keep_fc and GRAD_fc).")
 }
 
 # 9) Controls / HTML Summary (wie bei dir) -----------------------------
