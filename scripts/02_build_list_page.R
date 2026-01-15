@@ -3,7 +3,7 @@
 # Build list page (summary table) for GitHub Pages
 # - meta: data/Koordinaten_Wasserfaelle/tirol_eisklettern_links_entries_diff.csv
 # - assignments: data/AWS/icefalls_nearest_station.csv (optional)
-# - topo urls + topo sunrise: data/Koordinaten_Wasserfaelle/icefalls_sun_horizon.csv (optional)
+# - topo urls: data/Koordinaten_Wasserfaelle/icefalls_sun_horizon.csv (optional)
 # - model runs: data/ModelRuns/model_uid<uid>.csv
 # - output: site/icefalls_table.json + site/list.html
 # ============================================================
@@ -16,6 +16,9 @@ suppressPackageStartupMessages({
 })
 
 TZ_LOCAL <- "Europe/Vienna"
+
+# Tomorrow (local) – used in sun + model summaries
+tomorrow <- as.Date(with_tz(Sys.time(), TZ_LOCAL) + days(1))
 
 # ----------------------------
 # Paths
@@ -67,6 +70,11 @@ parse_time_any <- function(x, tz = TZ_LOCAL) {
   if (inherits(x, "POSIXct")) return(with_tz(x, tz))
   x <- as.character(x)
   x[x %in% c("", "NA", "NaN", "NULL")] <- NA_character_
+  
+  # handle ISO strings like 2025-11-01T13:13:00Z
+  x <- sub("Z$", "", x)
+  x <- gsub("T", " ", x, fixed = TRUE)
+  
   t <- suppressWarnings(lubridate::ymd_hms(x, tz = tz))
   if (all(is.na(t))) t <- suppressWarnings(lubridate::ymd_hm(x, tz = tz))
   if (all(is.na(t))) t <- suppressWarnings(lubridate::parse_date_time(
@@ -85,75 +93,28 @@ fmt_pct <- function(x, digits = 0) {
   ifelse(is.finite(x), paste0(round(x * 100, digits), "%"), NA_character_)
 }
 
-# Extract first HH:MM from any string (or return NA)
-extract_hm <- function(x) {
+first_nonempty <- function(x) {
   x <- as.character(x)
   x[x %in% c("", "NA", "NaN", "NULL")] <- NA_character_
-  out <- rep(NA_character_, length(x))
-  ok <- !is.na(x)
-  if (any(ok)) {
-    # IMPORTANT: use \b as word-boundary ("\b"), not "" (backspace)
-    m <- regexpr("\b([01]?[0-9]|2[0-3]):[0-5][0-9]\b", x[ok], perl = TRUE)
-    hit <- m > 0
-    out_ok <- rep(NA_character_, sum(ok))
-    out_ok[hit] <- regmatches(x[ok], m)[hit]
-    out[ok] <- out_ok
-  }
-  out
+  x <- x[!is.na(x)]
+  if (length(x) == 0) return(NA_character_)
+  x[[1]]
 }
 
-# Format duration in hours as human-friendly text (e.g., "17 min", "1 h 05 min")
+fmt_hm <- function(t) {
+  ifelse(!is.na(t), format(t, "%H:%M"), NA_character_)
+}
+
 fmt_duration_h <- function(h) {
-  # Vectorised: h is a numeric vector in hours
   h <- to_num(h)
   out <- rep(NA_character_, length(h))
-  
   ok <- is.finite(h)
-  if (!any(ok)) return(out)
-  
-  m  <- as.integer(round(h[ok] * 60))
-  hh <- m %/% 60
-  mm <- m %% 60
-  
-  out[ok] <- ifelse(
-    m < 60,
-    paste0(m, " min"),
-    ifelse(
-      mm == 0,
-      paste0(hh, " h"),
-      paste0(hh, " h ", sprintf("%02d", mm), " min")
-    )
-  )
-  
+  mins <- round(h[ok] * 60)
+  hh <- mins %/% 60
+  mm <- mins %% 60
+  out[ok] <- paste0(hh, " h ", mm, " min")
   out
 }
-
-# Parse ISO-8601 timestamps that may end with 'Z' (UTC) and return local HH:MM
-parse_iso_z_to_local_hm <- function(x, tz_local = TZ_LOCAL) {
-  raw <- as.character(x)
-  raw[raw %in% c("", "NA", "NaN", "NULL")] <- NA_character_
-  
-  # make timezone explicit (Z -> +00:00)
-  raw2 <- raw
-  if (any(!is.na(raw2))) raw2[!is.na(raw2)] <- sub("Z$", "+00:00", raw2[!is.na(raw2)])
-  
-  t_utc <- suppressWarnings(lubridate::ymd_hms(raw2, tz = "UTC"))
-  if (all(is.na(t_utc))) t_utc <- suppressWarnings(lubridate::ymd_hm(raw2, tz = "UTC"))
-  if (all(is.na(t_utc))) t_utc <- suppressWarnings(lubridate::parse_date_time(
-    raw2,
-    orders = c("Ymd HMS", "Ymd HM", "Y-m-d H:M:S", "Y-m-d H:M", "Y-m-dTH:M:S", "Y-m-dTH:M"),
-    tz = "UTC"
-  ))
-  
-  t_loc <- suppressWarnings(lubridate::with_tz(t_utc, tz_local))
-  hm <- ifelse(!is.na(t_loc), format(t_loc, "%H:%M"), extract_hm(raw))
-  list(time_local = t_loc, hm = hm)
-}
-
-# ----------------------------
-# 0) Tomorrow (local)
-# ----------------------------
-tomorrow <- as.Date(with_tz(Sys.time(), TZ_LOCAL) + days(1))
 
 # ----------------------------
 # 1) Load meta (CSV)
@@ -193,58 +154,44 @@ if (file.exists(PATH_ASSIGN)) {
 }
 
 # ----------------------------
-# 3) Load topo urls + topo sunrise (optional)
+# 3) Sun horizons (optional)
+#    -> tomorrow: local sunrise/sunset in topo + duration
 # ----------------------------
-# Expected (from earlier pipeline): columns like
-# uid, date, sunrise_topo, sunset_topo, sun_hours_topo, topo_url, topo_slug
+parse_time_iso_z <- function(x, out_tz = TZ_LOCAL) {
+  if (is.null(x)) return(as.POSIXct(NA))
+  x <- as.character(x)
+  x[x %in% c("", "NA", "NaN", "NULL")] <- NA_character_
+  x2 <- sub("Z$", "", x)
+  x2 <- gsub("T", " ", x2, fixed = TRUE)
+  t <- suppressWarnings(lubridate::ymd_hms(x2, tz = "UTC"))
+  if (all(is.na(t))) t <- suppressWarnings(lubridate::ymd_hm(x2, tz = "UTC"))
+  suppressWarnings(lubridate::with_tz(t, out_tz))
+}
+
 sun <- NULL
 if (file.exists(PATH_SUN)) {
   sun_raw <- read_any_delim(PATH_SUN) %>%
     rename_with(tolower) %>%
-    mutate(uid = as.integer(uid))
-  
-  # date
-  if ("date" %in% names(sun_raw)) {
-    sun_raw <- sun_raw %>% mutate(date = as.Date(.data$date))
-  } else {
-    sun_raw$date <- as.Date(NA)
-  }
-  
-  # sunrise/sunset (topo) in local time + duration
-  sunrise <- parse_iso_z_to_local_hm(get_chr(sun_raw, "sunrise_topo", "sunrise", "sunrise_time", "sonnenaufgang", "sun_first"))
-  sunset  <- parse_iso_z_to_local_hm(get_chr(sun_raw, "sunset_topo", "sunset", "sunset_time", "sonnenuntergang", "sun_last"))
-  
-  sun_raw <- sun_raw %>%
     mutate(
-      sunrise_tomorrow_txt = sunrise$hm,
-      sunset_tomorrow_txt  = sunset$hm,
-      sun_tomorrow_range_txt = dplyr::case_when(
-        !is.na(sunrise_tomorrow_txt) & !is.na(sunset_tomorrow_txt) ~ paste0(sunrise_tomorrow_txt, "–", sunset_tomorrow_txt),
-        !is.na(sunrise_tomorrow_txt) &  is.na(sunset_tomorrow_txt) ~ paste0(sunrise_tomorrow_txt, "–—"),
-        is.na(sunrise_tomorrow_txt) & !is.na(sunset_tomorrow_txt) ~ paste0("—–", sunset_tomorrow_txt),
-        TRUE ~ NA_character_
-      ),
-      sun_hours_tomorrow_h = get_num(sun_raw, "sun_hours_topo", "sun_hours", "sun_hours_h"),
-      sun_duration_tomorrow_txt = fmt_duration_h(sun_hours_tomorrow_h)
+      uid = as.integer(uid),
+      date = as.Date(get_chr(., "date"))
     )
   
   sun <- sun_raw %>%
     filter(.data$date == tomorrow) %>%
-    dplyr::select(dplyr::any_of(c(
-      "uid",
-      "topo_url",
-      "topo_slug",
-      "sun_tomorrow_range_txt",
-      "sun_hours_tomorrow_h",
-      "sun_duration_tomorrow_txt"
-    ))) %>%
     group_by(uid) %>%
     summarise(
       topo_url  = dplyr::coalesce(first(topo_url[topo_url != ""]), first(topo_url)),
       topo_slug = dplyr::coalesce(first(topo_slug[topo_slug != ""]), first(topo_slug)),
-      sun_tomorrow_range_txt = dplyr::coalesce(first(sun_tomorrow_range_txt[sun_tomorrow_range_txt != "" & !is.na(sun_tomorrow_range_txt)]), first(sun_tomorrow_range_txt)),
-      sun_hours_tomorrow_h = dplyr::coalesce(first(sun_hours_tomorrow_h[is.finite(sun_hours_tomorrow_h)]), first(sun_hours_tomorrow_h)),
-      sun_duration_tomorrow_txt = dplyr::coalesce(first(sun_duration_tomorrow_txt[sun_duration_tomorrow_txt != "" & !is.na(sun_duration_tomorrow_txt)]), first(sun_duration_tomorrow_txt)),
+      sunrise_topo_local = parse_time_iso_z(first_nonempty(sunrise_topo), out_tz = TZ_LOCAL),
+      sunset_topo_local  = parse_time_iso_z(first_nonempty(sunset_topo),  out_tz = TZ_LOCAL),
+      sun_hours_tomorrow_h = to_num(first_nonempty(sun_hours_topo)),
+      sun_tomorrow_range_txt = dplyr::if_else(
+        is.na(sunrise_topo_local) | is.na(sunset_topo_local),
+        NA_character_,
+        paste0(fmt_hm(sunrise_topo_local), "–", fmt_hm(sunset_topo_local))
+      ),
+      sun_duration_tomorrow_txt = fmt_duration_h(sun_hours_tomorrow_h),
       .groups = "drop"
     )
 }
@@ -252,6 +199,7 @@ if (file.exists(PATH_SUN)) {
 # ----------------------------
 # 4) Model summary (tomorrow)
 # ----------------------------
+
 summarise_uid_model <- function(uid) {
   f <- file.path(DIR_MODELS, sprintf("model_uid%s.csv", uid))
   if (!file.exists(f) || file.info(f)$size <= 0) {
@@ -330,7 +278,7 @@ out <- meta %>% left_join(model_sum, by = "uid")
 
 if (!is.null(assign)) {
   assign_slim <- assign %>%
-    dplyr::select(dplyr::any_of(c(
+    dplyr::select(any_of(c(
       "uid","station_id","source","dist_km","elev_diff_m",
       "icefall_name","ice_lon","ice_lat","icefall_elev_m","icefall_height_m"
     ))) %>%
@@ -357,9 +305,6 @@ if (!is.null(sun)) {
 } else {
   out$topo_url <- NA_character_
   out$topo_slug <- NA_character_
-  out$sun_tomorrow_range_txt <- NA_character_
-  out$sun_hours_tomorrow_h <- NA_real_
-  out$sun_duration_tomorrow_txt <- NA_character_
 }
 
 out <- out %>%
@@ -489,9 +434,6 @@ html <- paste0(
   let sortKey = "climb_max_tomorrow";
   let sortAsc = false;
 
-  // when sorting by these, ALWAYS push missing values to the bottom
-  const missingAlwaysBottomKeys = new Set(["climb_max_tomorrow", "thickness_tomorrow_07_m", "sun_hours_tomorrow_h"]);
-
   function num(x){
     if (x === null || x === undefined) return NaN;
     const n = Number(x);
@@ -506,31 +448,25 @@ html <- paste0(
     const t = query.toLowerCase();
     const blob = [
       r.name, r.difficulty, r.aspect, r.station_id, r.source,
-      r.approach, r.descent, r.sun_tomorrow_range_txt, r.sun_duration_tomorrow_txt
+      r.approach, r.descent
     ].map(str).join(" | ").toLowerCase();
     return blob.includes(t);
   }
-
   function cmp(a,b){
     const va = a[sortKey];
     const vb = b[sortKey];
 
     const na = num(va), nb = num(vb);
 
-    // numeric compare
-    if (missingAlwaysBottomKeys.has(sortKey)) {
-      const aOK = isFinite(na), bOK = isFinite(nb);
-      if (aOK && !bOK) return -1;
-      if (!aOK && bOK) return 1;
-      if (!aOK && !bOK) return 0;
-      return sortAsc ? (na-nb) : (nb-na);
-    }
+    const aMiss = !isFinite(na);
+    const bMiss = !isFinite(nb);
 
-    if (isFinite(na) && isFinite(nb)) return sortAsc ? (na-nb) : (nb-na);
-    if (isFinite(na) && !isFinite(nb)) return sortAsc ? -1 : 1;
-    if (!isFinite(na) && isFinite(nb)) return sortAsc ? 1 : -1;
+    // Missing values always bottom (regardless of sort direction)
+    if (aMiss && !bMiss) return 1;
+    if (!aMiss && bMiss) return -1;
 
-    // string compare
+    if (!aMiss && !bMiss) return sortAsc ? (na-nb) : (nb-na);
+
     const sa = str(va).toLowerCase();
     const sb = str(vb).toLowerCase();
     if (sa < sb) return sortAsc ? -1 : 1;
@@ -568,7 +504,7 @@ html <- paste0(
       const topoLink = r.topo_url ? `<a href="${r.topo_url}" target="_blank" rel="noopener">Topo</a>` : "<span class=\\"muted\\">—</span>";
       const plotUrl = r.plot_url || "";
       const plotBtn = plotUrl
-        ? `<button class="btn" data-plot="${plotUrl}" data-title="${str(r.name).replace(/\"/g, "&quot;")}">🔍 Vollbild</button>`
+        ? `<button class="btn" data-plot="${plotUrl}" data-title="${str(r.name).replace(/"/g, "&quot;")}">🔍 Vollbild</button>`
         : `<span class="muted">—</span>`;
 
       tr.innerHTML = `
@@ -581,7 +517,7 @@ html <- paste0(
         <td>${str(r.difficulty) || "<span class=\\"muted\\">—</span>"}</td>
         <td>${isFinite(num(r.elev_m)) ? Math.round(num(r.elev_m)) : "<span class=\\"muted\\">—</span>"}</td>
         <td>${str(r.sun_tomorrow_range_txt) || "<span class=\"muted\">—</span>"}</td>
-        <td>${str(r.sun_duration_tomorrow_txt) || "<span class=\"muted\">—</span>"}</td>
+        <td>${r.sun_duration_tomorrow_txt || "<span class=\"muted\">—</span>"}</td>
         <td>${r.thickness_tomorrow_07_txt || "<span class=\\"muted\\">—</span>"}</td>
         <td>${r.climb_max_tomorrow_txt || "<span class=\\"muted\\">—</span>"}</td>
         <td>${str(r.climb_max_time_local) || "<span class=\\"muted\\">—</span>"}</td>
@@ -611,15 +547,37 @@ html <- paste0(
 
   q.addEventListener("input", render);
 
-  fetch("icefalls_table.json", {cache: "no-store"})
-    .then(r => r.json())
-    .then(data => {
-      rows = data || [];
-      status.textContent = "Daten geladen.";
+  // Robust JSON loading (works whether list.html is at /, /site/, etc.)
+  const seg = window.location.pathname.split("/").filter(Boolean);
+  const base = seg.length ? ("/" + seg[0] + "/") : "/";
+  const candidates = [
+    "icefalls_table.json",
+    "./icefalls_table.json",
+    "../icefalls_table.json",
+    base + "icefalls_table.json"
+  ];
+
+  function fetchJsonFirstOk(urls){
+    return urls.reduce((p, u) => {
+      return p.catch(() => fetch(u, {cache: "no-store"}).then(r => {
+        if (!r.ok) throw new Error(u + " -> HTTP " + r.status);
+        return r.json().then(data => ({ data, url: u }));
+      }));
+    }, Promise.reject(new Error("no candidates tried")));
+  }
+
+  status.textContent = "JS gestartet. Lade Daten …";
+
+  fetchJsonFirstOk([base + "icefalls_table.json", ...candidates])
+    .then(res => {
+      rows = (res && res.data) ? res.data : [];
+      const u = (res && res.url) ? res.url : "(unbekannt)";
+      status.textContent = `Daten geladen: ${rows.length} Einträge (Quelle: ${u})`;
       render();
     })
     .catch(err => {
       status.textContent = "Fehler beim Laden: " + err;
+      console.error(err);
     });
 })();
 </script>
